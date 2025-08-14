@@ -177,8 +177,6 @@ class App:
         
         self.api_key_entry = tk.Entry(root, width=60, show="*")
         self.api_key_entry.pack(pady=5)
-        
-        self.load_api_key() # Load key on startup
 
         self.select_button = tk.Button(root, text="開始處理", command=self.run_processing_thread, height=2, width=20)
         self.select_button.pack(pady=20)
@@ -188,6 +186,8 @@ class App:
         
         self.log("歡迎使用 Zoe 的魔法工具！")
         self.log("請先輸入您的 OpenAI API Key，然後點擊「開始處理」。")
+        
+        self.load_api_key() # Load key after log area is created
 
     def log(self, message):
         self.log_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
