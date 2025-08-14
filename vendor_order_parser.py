@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 
 # --- Constants ---
+CONFIG_FILE = 'config.json'
 ERP_COLUMNS = [
     '寄件廠商', '暫代條碼', '型號', '貨號', '預計發售月份', '上架日期',
     '結單日期', '條碼', '品名', '品牌', '國際條碼', '起始進價',
@@ -176,8 +177,8 @@ class App:
         
         self.api_key_entry = tk.Entry(root, width=60, show="*")
         self.api_key_entry.pack(pady=5)
-        if os.environ.get("OPENAI_API_KEY"):
-            self.api_key_entry.insert(0, os.environ.get("OPENAI_API_KEY"))
+        
+        self.load_api_key() # Load key on startup
 
         self.select_button = tk.Button(root, text="開始處理", command=self.run_processing_thread, height=2, width=20)
         self.select_button.pack(pady=20)
@@ -192,6 +193,28 @@ class App:
         self.log_area.insert(tk.END, f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
         self.log_area.see(tk.END)
         self.root.update_idletasks()
+
+    def load_api_key(self):
+        """Loads API key from config file if it exists."""
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    api_key = config.get('OPENAI_API_KEY')
+                    if api_key:
+                        self.api_key_entry.insert(0, api_key)
+                        self.log("成功從 config.json 讀取 API Key。")
+        except Exception as e:
+            self.log(f"讀取設定檔時發生錯誤: {e}")
+
+    def save_api_key(self, api_key):
+        """Saves API key to the config file."""
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump({'OPENAI_API_KEY': api_key}, f)
+            self.log("API Key 已儲存至 config.json 供下次使用。")
+        except Exception as e:
+            self.log(f"儲存設定檔時發生錯誤: {e}")
 
     def run_processing_thread(self):
         thread = threading.Thread(target=self.process_files)
@@ -209,6 +232,7 @@ class App:
             
             self.client = openai.OpenAI(api_key=api_key)
             self.log("OpenAI API Key 已設定。")
+            self.save_api_key(api_key) # Save key on successful use
 
             input_files = filedialog.askopenfilenames(
                 title="請選擇 1 到 5 個訂單檔案",
@@ -260,13 +284,13 @@ class App:
                     self.log(f"AI 提取失敗，跳過檔案 {os.path.basename(file_path)}。")
                     continue
 
-                raw_data_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_raw_data.json"
-                raw_data_path = os.path.join(output_dir, raw_data_filename)
+                # raw_data_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_raw_data.json"
+                # raw_data_path = os.path.join(output_dir, raw_data_filename)
                 try:
                     parsed_json = json.loads(ai_json_str)
-                    with open(raw_data_path, 'w', encoding='utf-8') as f:
-                        json.dump(parsed_json, f, ensure_ascii=False, indent=4)
-                    self.log(f"AI 提取的中介 JSON 已儲存至: {raw_data_path}")
+                    # with open(raw_data_path, 'w', encoding='utf-8') as f:
+                    #     json.dump(parsed_json, f, ensure_ascii=False, indent=4)
+                    # self.log(f"AI 提取的中介 JSON 已儲存至: {raw_data_path}")
                     
                     global_info = parsed_json.get('global_info', {})
                     products = parsed_json.get('products', [])
@@ -274,6 +298,9 @@ class App:
                         all_processed_products.append({"global_info": global_info, "product_data": product})
                 except json.JSONDecodeError:
                     self.log(f"錯誤: AI 回傳的不是有效的 JSON。")
+                    # Fallback to save the raw string if JSON parsing fails
+                    raw_data_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_invalid_response.txt"
+                    raw_data_path = os.path.join(output_dir, raw_data_filename)
                     with open(raw_data_path, 'w', encoding='utf-8') as f: f.write(ai_json_str)
                     self.log(f"無效的 AI 回應已儲存至: {raw_data_path}")
                     continue
