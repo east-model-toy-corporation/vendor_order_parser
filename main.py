@@ -37,9 +37,42 @@ def process_files_main(app, api_key, input_files, output_file):
         shipper_file = os.path.join(script_dir, '廠商名單.xlsx')
         shipper_list = []
         if os.path.exists(shipper_file):
-            shipper_df = pd.read_excel(shipper_file)
-            shipper_list = shipper_df['寄件廠商'].dropna().tolist()
-            app.log(f"成功讀取 {len(shipper_list)} 個寄件廠商。")
+            try:
+                shipper_df = pd.read_excel(shipper_file)
+                # If explicit header exists, use it. Otherwise prefer column D (index 3) then C (index 2).
+                raw_list = []
+                if '寄件廠商' in shipper_df.columns:
+                    raw_list = shipper_df['寄件廠商'].dropna().astype(str).tolist()
+                else:
+                    for idx in (3, 2):
+                        try:
+                            col = shipper_df.iloc[:, idx].dropna().astype(str)
+                            if not col.empty:
+                                raw_list = col.tolist()
+                                app.log(f"注意: 未找到 '寄件廠商' 標題，改從第 {idx+1} 欄讀取。")
+                                break
+                        except Exception:
+                            continue
+
+                # Expand comma-separated values in each cell into individual tokens
+                expanded = []
+                for cell in raw_list:
+                    for part in [p.strip() for p in str(cell).split(',')]:
+                        if part:
+                            expanded.append(part)
+
+                # Remove duplicates while preserving order
+                seen = set()
+                ordered = []
+                for v in expanded:
+                    if v not in seen:
+                        seen.add(v)
+                        ordered.append(v)
+
+                shipper_list = ordered
+                app.log(f"成功讀取 {len(shipper_list)} 個寄件廠商（已展開逗號分隔值）。")
+            except Exception as e:
+                app.log(f"讀取 '廠商名單.xlsx' 時發生錯誤: {e}")
         else:
             app.log("警告: '廠商名單.xlsx' 不存在。")
 
@@ -54,7 +87,27 @@ def process_files_main(app, api_key, input_files, output_file):
             # 優先嘗試從檔名擷取結單日期
             filename_order_date = extract_order_date_from_filename(file_path, app.log)
 
-            ai_json_str = call_ai_to_extract_data(client, csv_content, shipper_list, app.log)
+            # 新規則：先嘗試從檔名找寄件廠商（只要檔名包含任一 shipper token 即視為命中），
+            # 若檔名命中則只把該 token 傳給 AI（優先），否則再以檔案內容搭配完整 shipper_list 搜尋。
+            filename_based_shipper = None
+            basename = os.path.basename(file_path)
+            if shipper_list:
+                lowname = basename.lower()
+                for s in shipper_list:
+                    try:
+                        if str(s).strip() and str(s).lower() in lowname:
+                            filename_based_shipper = s
+                            break
+                    except Exception:
+                        continue
+
+            if filename_based_shipper:
+                app.log(f"在檔名找到寄件廠商: {filename_based_shipper}（將優先使用此值）")
+                shipper_list_for_call = [filename_based_shipper]
+            else:
+                shipper_list_for_call = shipper_list
+
+            ai_json_str = call_ai_to_extract_data(client, csv_content, shipper_list_for_call, app.log)
             if not ai_json_str:
                 app.log(f"AI 提取失敗，跳過檔案 {os.path.basename(file_path)}。")
                 continue

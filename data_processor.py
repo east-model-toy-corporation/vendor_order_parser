@@ -184,6 +184,26 @@ def build_final_df(all_products, logger):
             shelf_date = datetime.now().strftime('%Y/%m/%d')
         except Exception:
             shelf_date = ''
+
+        # compute the Excel row number for formulas: header is row 1, second row is description,
+        # actual data starts at row 3
+        excel_row = len(processed_rows) + 3
+
+        # formula to extract brand token from 品名 (column L) and lookup brand code from
+        # '品牌對照資料查詢' sheet (A:A contains 品牌代號, C:C contains 品名開頭 to match)
+        # Example formula (Excel/Google Sheets compatible):
+        # =IFERROR(INDEX('品牌對照資料查詢'!A:A, MATCH(IFERROR(TRIM(LEFT(L2,FIND("|",L2)-1)),TRIM(L2)), '品牌對照資料查詢'!C:C, 0)), "")
+        brand_formula = (
+            "=IFERROR(INDEX('品牌對照資料查詢'!A:A, "
+            "MATCH(IFERROR(TRIM(LEFT(L{r},FIND(\"|\",L{r})-1)),TRIM(L{r})), '品牌對照資料查詢'!C:C, 0)), \"\")"
+        ).format(r=excel_row)
+
+        # formula to lookup 廠商代碼 from '廠商基本資料' sheet by matching 寄件廠商 in column D
+        # =IFERROR(INDEX('廠商基本資料'!A:A, MATCH(D2, '廠商基本資料'!D:D, 0)), "")
+        vendor_formula = (
+            "=IFERROR(INDEX('廠商基本資料'!A:A, MATCH(D{r}, '廠商基本資料'!D:D, 0)), \"\")"
+        ).format(r=excel_row)
+
         new_row = {
             # first three columns required by Google Sheet template
             'ERP': '待匯',
@@ -198,11 +218,13 @@ def build_final_df(all_products, logger):
             '結單日期': order_date,
             '條碼': p.get('國際條碼', ''),
             '品名': p.get('品名', ''),
-            '品牌': '',
+            # insert formula so spreadsheet computes 品牌 based on 品名 and 品牌對照資料查詢 sheet
+            '品牌': brand_formula,
             '國際條碼': '',
             '起始進價': p.get('起始進價', ''),
             '建議售價': p.get('建議售價', ''),
-            '廠商': '', '類1': '', '類2': '', '類3': '', '類4': '',
+            # insert formula so spreadsheet computes 廠商 (廠商代碼) based on 寄件廠商 and 廠商基本資料 sheet
+            '廠商': vendor_formula, '類1': '', '類2': '', '類3': '', '類4': '',
             '顏色': '', '季別': '',
             '尺1': 'F', '尺寸名稱': 'F',
             '特價': '', '批價': '', '建檔': '',

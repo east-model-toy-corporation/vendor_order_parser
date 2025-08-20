@@ -3,7 +3,7 @@ import json
 import os
 from typing import Optional
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
 # Scope for Google Sheets and Drive
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -29,11 +29,14 @@ class GSheetsClient:
         Note: user must provide a service account JSON with proper permissions to edit the target sheet.
         """
         if creds_dict:
-            self.creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPES)
+            # create Credentials from a dict (service account info)
+            self.creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         elif creds_json_path and os.path.exists(creds_json_path):
-            self.creds = ServiceAccountCredentials.from_json_keyfile_name(creds_json_path, SCOPES)
+            # create Credentials from a JSON keyfile
+            self.creds = Credentials.from_service_account_file(creds_json_path, scopes=SCOPES)
         else:
             raise ValueError("Service account credentials required (creds_json_path or creds_dict).")
+        # gspread accepts google-auth credentials
         self.client = gspread.authorize(self.creds)
 
     def append_dataframe(self, sheet_id: str, df, logger):
