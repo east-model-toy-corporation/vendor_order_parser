@@ -9,16 +9,12 @@ from gui import App
 from ai_api import call_ai_to_extract_data
 from data_processor import convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename
 
-def process_files_main(app, api_key):
+def process_files_main(app, api_key, input_files, output_file):
     try:
         client = openai.OpenAI(api_key=api_key)
         app.log("OpenAI API Key 已設定。")
         app.save_api_key(api_key)
-
-        input_files = filedialog.askopenfilenames(
-            title="請選擇 1 到 10 個訂單檔案",
-            filetypes=[("Excel files", "*.xlsx *.xls")]
-        )
+        # input_files and output_file are provided by the GUI
         if not input_files:
             app.log("操作取消：未選擇任何檔案。")
             app.select_button.config(state=tk.NORMAL)
@@ -28,20 +24,12 @@ def process_files_main(app, api_key):
             app.log("錯誤：選擇的檔案超過 10 個。")
             app.select_button.config(state=tk.NORMAL)
             return
-        
-        app.log(f"已選擇 {len(input_files)} 個檔案。")
 
-        output_file = filedialog.asksaveasfilename(
-            title="請指定輸出檔案位置",
-            defaultextension=".xlsx",
-            initialfile="究極進化版用.xlsx",
-            filetypes=[("Excel file", "*.xlsx")]
-        )
+        app.log(f"已選擇 {len(input_files)} 個檔案。")
         if not output_file:
             app.log("操作取消：未指定輸出檔案。")
             app.select_button.config(state=tk.NORMAL)
             return
-        
         app.log(f"輸出檔案將儲存至: {output_file}")
 
         script_dir = os.path.dirname(os.path.abspath(__file__))

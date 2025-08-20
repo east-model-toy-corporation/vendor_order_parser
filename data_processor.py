@@ -117,11 +117,36 @@ def generate_erp_excel(all_products, output_path, logger):
         global_info = p_info['global_info']
         
         release_month = p.get('預計發售月份', '')
-        if isinstance(release_month, str) and release_month:
-            match = re.search(r'(\d{4})[/\\-年.]?(\d{1,2})', release_month)
-            if match:
-                year, month = match.groups()
-                release_month = f"{year}{int(month):02d}"
+        # Normalize release_month whether it's a datetime-like, a string with time, or a simple string
+        if release_month is None:
+            release_month = ''
+        else:
+            # If it's not a string, try to parse with pandas (covers Timestamp/datetime)
+            if not isinstance(release_month, str):
+                try:
+                    ts = pd.to_datetime(release_month, errors='coerce')
+                    if not pd.isna(ts):
+                        release_month = f"{ts.year}{int(ts.month):02d}"
+                    else:
+                        release_month = str(release_month)
+                except Exception:
+                    release_month = str(release_month)
+            else:
+                # it's a string: try parsing as datetime first (handles '2025-11-01 00:00:00')
+                try:
+                    ts = pd.to_datetime(release_month, errors='coerce')
+                    if not pd.isna(ts):
+                        release_month = f"{ts.year}{int(ts.month):02d}"
+                    else:
+                        match = re.search(r'(\d{4})[/\\-年.]?(\d{1,2})', release_month)
+                        if match:
+                            year, month = match.groups()
+                            release_month = f"{year}{int(month):02d}"
+                except Exception:
+                    match = re.search(r'(\d{4})[/\\-年.]?(\d{1,2})', release_month)
+                    if match:
+                        year, month = match.groups()
+                        release_month = f"{year}{int(month):02d}"
         
         order_date = global_info.get('結單日期', '')
         if isinstance(order_date, str) and order_date:
