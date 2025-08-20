@@ -14,11 +14,17 @@ class App:
         self.root.title("究極進化版 ERP 合併標準化工具")
         self.root.geometry("700x500")
 
+        # API key
         self.api_key_label = tk.Label(root, text="OpenAI API Key:")
         self.api_key_label.pack(pady=(10, 0))
-
         self.api_key_entry = tk.Entry(root, width=60, show="*")
         self.api_key_entry.pack(pady=5)
+
+        # Google Sheet URL input
+        self.sheet_label = tk.Label(root, text="Google Sheet 連結 (可留空):")
+        self.sheet_label.pack(pady=(10, 0))
+        self.sheet_entry = tk.Entry(root, width=80)
+        self.sheet_entry.pack(pady=5)
 
         # Buttons for import files and start processing
         btn_frame = tk.Frame(root)
@@ -57,15 +63,19 @@ class App:
         self.root.update_idletasks()
 
     def load_api_key(self):
-        """Loads API key from config file if it exists."""
+        """Loads API key and sheet URL from config file if it exists."""
         try:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
                     api_key = config.get('OPENAI_API_KEY')
+                    sheet = config.get('GSHEET_URL')
                     if api_key:
                         self.api_key_entry.insert(0, api_key)
                         self.log("成功從 config.json 讀取 API Key。")
+                    if sheet:
+                        self.sheet_entry.insert(0, sheet)
+                        self.log("成功從 config.json 讀取 Google Sheet 連結。")
         except Exception as e:
             self.log(f"讀取設定檔時發生錯誤: {e}")
 
@@ -88,7 +98,7 @@ class App:
         self.log(f"已匯入 {len(self.input_files)} 個檔案。")
 
     def select_output_file(self):
-        """Opens save-as dialog to let user choose output file and displays it."""
+        """Opens save-as dialog to let user choose output file and returns path."""
         out = filedialog.asksaveasfilename(
             title="請指定輸出檔案位置",
             defaultextension=".xlsx",
@@ -98,13 +108,26 @@ class App:
         return out
 
     def save_api_key(self, api_key):
-        """Saves API key to the config file."""
+        """Saves API key and sheet URL to the config file."""
         try:
+            cfg = {'OPENAI_API_KEY': api_key}
+            try:
+                sheet = self.sheet_entry.get().strip()
+                if sheet:
+                    cfg['GSHEET_URL'] = sheet
+            except Exception:
+                pass
             with open(CONFIG_FILE, 'w') as f:
-                json.dump({'OPENAI_API_KEY': api_key}, f)
-            self.log("API Key 已儲存至 config.json 供下次使用。")
+                json.dump(cfg, f)
+            self.log("API Key 與 Google Sheet 設定已儲存至 config.json 供下次使用。")
         except Exception as e:
             self.log(f"儲存設定檔時發生錯誤: {e}")
+
+    def get_sheet_url(self):
+        try:
+            return self.sheet_entry.get().strip()
+        except Exception:
+            return ''
 
     def run_processing_thread(self):
         api_key = self.api_key_entry.get()
@@ -137,4 +160,69 @@ class App:
         thread = threading.Thread(target=process_files_main, args=(self, api_key, self.input_files, self.output_file))
         thread.daemon = True
         thread.start()
+
+        def select_output_file(self):
+            """Opens save-as dialog to let user choose output file and displays it."""
+            out = filedialog.asksaveasfilename(
+                title="請指定輸出檔案位置",
+                defaultextension=".xlsx",
+                initialfile="究極進化版用.xlsx",
+                filetypes=[("Excel file", "*.xlsx")]
+            )
+            return out
+
+        def save_api_key(self, api_key):
+            """Saves API key to the config file."""
+            try:
+                # also save sheet url if provided
+                cfg = {'OPENAI_API_KEY': api_key}
+                try:
+                    sheet = self.sheet_entry.get().strip()
+                    if sheet:
+                        cfg['GSHEET_URL'] = sheet
+                except Exception:
+                    pass
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(cfg, f)
+                self.log("API Key 與 Google Sheet 設定已儲存至 config.json 供下次使用。")
+            except Exception as e:
+                self.log(f"儲存設定檔時發生錯誤: {e}")
+
+        def get_sheet_url(self):
+            try:
+                return self.sheet_entry.get().strip()
+            except Exception:
+                return ''
+
+        def run_processing_thread(self):
+            api_key = self.api_key_entry.get()
+            if not api_key:
+                messagebox.showerror("錯誤", "請輸入您的 OpenAI API Key。")
+                return
+
+            # validate selections
+            if not getattr(self, 'input_files', None):
+                messagebox.showerror("錯誤", "尚未匯入任何輸入檔案，請先按「匯入檔案」。")
+                return
+
+            # ask for output file now (per new requirement)
+            out = self.select_output_file()
+            if not out:
+                self.log("未指定輸出檔案，已中止處理。")
+                return
+            self.output_file = out
+            self.output_label.config(text=f"輸出檔案: {self.output_file}")
+            self.log(f"輸出檔案已設定為: {self.output_file}")
+
+            # import here to avoid circular import at module load time
+            try:
+                from main import process_files_main
+            except Exception as e:
+                messagebox.showerror("錯誤", f"無法載入處理函式: {e}")
+                return
+
+            self.select_button.config(state=tk.DISABLED)
+            thread = threading.Thread(target=process_files_main, args=(self, api_key, self.input_files, self.output_file))
+            thread.daemon = True
+            thread.start()
 

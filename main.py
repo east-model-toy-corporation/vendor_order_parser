@@ -8,6 +8,7 @@ import tkinter as tk
 from gui import App
 from ai_api import call_ai_to_extract_data
 from data_processor import convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename
+from data_processor import build_final_df
 
 def process_files_main(app, api_key, input_files, output_file):
     try:
@@ -76,7 +77,39 @@ def process_files_main(app, api_key, input_files, output_file):
                 continue
         
         if all_processed_products:
-            generate_erp_excel(all_processed_products, output_file, app.log)
+            # Build final DataFrame first
+            final_df = build_final_df(all_processed_products, app.log)
+
+            # Check if GUI provided a Google Sheet URL
+            try:
+                sheet_url = app.get_sheet_url()
+            except Exception:
+                sheet_url = None
+
+            sheet_id = None
+            if sheet_url:
+                # lightweight local extraction to avoid importing gsheets just for parsing
+                import re
+                m = re.search(r"/d/([a-zA-Z0-9-_]+)", sheet_url)
+                if m:
+                    sheet_id = m.group(1)
+                elif re.match(r"^[a-zA-Z0-9-_]{20,}$", sheet_url):
+                    sheet_id = sheet_url
+
+            if sheet_id:
+                # try to import Google Sheets client lazily and append
+                try:
+                    from gsheets import GSheetsClient
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    creds_path = os.path.join(script_dir, 'service_account.json')
+                    gs = GSheetsClient(creds_json_path=creds_path)
+                    gs.append_dataframe(sheet_id, final_df, app.log)
+                except Exception as e:
+                    # log and fall back to Excel output
+                    app.log(f"Google Sheets append failed or unavailable: {e}. Falling back to Excel output.")
+                    generate_erp_excel(all_processed_products, output_file, app.log)
+            else:
+                generate_erp_excel(all_processed_products, output_file, app.log)
         else:
             app.log("所有檔案處理完畢，但沒有找到任何有效的商品資料可供輸出。")
         

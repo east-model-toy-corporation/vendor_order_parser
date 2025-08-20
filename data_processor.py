@@ -4,6 +4,8 @@ import re
 from datetime import datetime, date, timedelta
 
 ERP_COLUMNS = [
+    # New required 30-column ERP layout: first three are ERP / GD / 平台前導
+    'ERP', 'GD', '平台前導',
     '寄件廠商', '暫代條碼', '型號', '貨號', '預計發售月份', '上架日期',
     '結單日期', '條碼', '品名', '品牌', '國際條碼', '起始進價',
     '建議售價', '廠商', '類1', '類2', '類3', '類4', '顏色', '季別',
@@ -106,16 +108,31 @@ def adjust_order_date(date_str, logger=None):
 def generate_erp_excel(all_products, output_path, logger):
     """Generates the final ERP Excel file from the combined list of processed products."""
     if not all_products:
-        logger("No products to process for the final Excel file.")
+        logger("No products to process for the final ERP output.")
         return
 
-    logger("Formatting data for the final ERP Excel file...")
-    
+    logger("Formatting data for the final ERP output...")
+
+    # build the DataFrame using helper
+    final_df = build_final_df(all_products, logger)
+
+    try:
+        final_df.to_excel(output_path, index=False, sheet_name='ERP')
+        logger(f"Success! Final report saved to:\n{output_path}")
+    except Exception as e:
+        logger(f"Error saving final Excel file: {e}")
+
+
+def build_final_df(all_products, logger):
+    """Builds and returns the final ERP DataFrame from processed products.
+
+    This helper is used by both Excel output and Google Sheets append.
+    """
     processed_rows = []
     for p_info in all_products:
         p = p_info['product_data']
         global_info = p_info['global_info']
-        
+
         release_month = p.get('預計發售月份', '')
         # Normalize release_month whether it's a datetime-like, a string with time, or a simple string
         if release_month is None:
@@ -147,7 +164,7 @@ def generate_erp_excel(all_products, output_path, logger):
                     if match:
                         year, month = match.groups()
                         release_month = f"{year}{int(month):02d}"
-        
+
         order_date = global_info.get('結單日期', '')
         if isinstance(order_date, str) and order_date:
             try:
@@ -168,6 +185,10 @@ def generate_erp_excel(all_products, output_path, logger):
         except Exception:
             shelf_date = ''
         new_row = {
+            # first three columns required by Google Sheet template
+            'ERP': '待匯',
+            'GD': '',
+            '平台前導': '',
             '寄件廠商': global_info.get('寄件廠商', ''),
             '暫代條碼': '',
             '型號': p.get('國際條碼', ''),
@@ -192,9 +213,4 @@ def generate_erp_excel(all_products, output_path, logger):
 
     final_df = pd.DataFrame(processed_rows)
     final_df = final_df.reindex(columns=ERP_COLUMNS).fillna('')
-
-    try:
-        final_df.to_excel(output_path, index=False, sheet_name='ERP')
-        logger(f"Success! Final report saved to:\n{output_path}")
-    except Exception as e:
-        logger(f"Error saving final Excel file: {e}")
+    return final_df
