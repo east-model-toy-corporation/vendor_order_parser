@@ -191,18 +191,20 @@ def build_final_df(all_products, logger):
 
         # formula to extract brand token from 品名 (column L) and lookup brand code from
         # '品牌對照資料查詢' sheet (A:A contains 品牌代號, C:C contains 品名開頭 to match)
-        # Example formula (Excel/Google Sheets compatible):
-        # =IFERROR(INDEX('品牌對照資料查詢'!A:A, MATCH(IFERROR(TRIM(LEFT(L2,FIND("|",L2)-1)),TRIM(L2)), '品牌對照資料查詢'!C:C, 0)), "")
+        # Use ROW() + INDIRECT so formula is independent of absolute row when appended.
+        # Example formula (works when appended anywhere):
+        # =IFERROR(INDEX('品牌對照資料查詢'!A:A, MATCH(IFERROR(TRIM(LEFT(INDIRECT("L"&ROW()),FIND("|",INDIRECT("L"&ROW()))-1)),TRIM(INDIRECT("L"&ROW()))), '品牌對照資料查詢'!C:C, 0)), "")
         brand_formula = (
             "=IFERROR(INDEX('品牌對照資料查詢'!A:A, "
-            "MATCH(IFERROR(TRIM(LEFT(L{r},FIND(\"|\",L{r})-1)),TRIM(L{r})), '品牌對照資料查詢'!C:C, 0)), \"\")"
-        ).format(r=excel_row)
+            "MATCH(IFERROR(TRIM(LEFT(INDIRECT(\"L\"&ROW()),FIND(\"|\",INDIRECT(\"L\"&ROW()))-1)),TRIM(INDIRECT(\"L\"&ROW()))), '品牌對照資料查詢'!C:C, 0)), \"\")"
+        )
 
         # formula to lookup 廠商代碼 from '廠商基本資料' sheet by matching 寄件廠商 in column D
-        # =IFERROR(INDEX('廠商基本資料'!A:A, MATCH(D2, '廠商基本資料'!D:D, 0)), "")
+        # Use INDIRECT("D"&ROW()) so the formula matches the same row regardless of where appended.
+        # =IFERROR(INDEX('廠商基本資料'!A:A, MATCH(INDIRECT("D"&ROW()), '廠商基本資料'!D:D, 0)), "")
         vendor_formula = (
-            "=IFERROR(INDEX('廠商基本資料'!A:A, MATCH(D{r}, '廠商基本資料'!D:D, 0)), \"\")"
-        ).format(r=excel_row)
+            "=IFERROR(INDEX('廠商基本資料'!A:A, MATCH(INDIRECT(\"D\"&ROW()), '廠商基本資料'!D:D, 0)), \"\")"
+        )
 
         new_row = {
             # first three columns required by Google Sheet template
