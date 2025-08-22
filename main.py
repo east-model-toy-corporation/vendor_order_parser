@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import pandas as pd
 import openai
@@ -33,8 +34,15 @@ def process_files_main(app, api_key, input_files, output_file):
             return
         app.log(f"輸出檔案將儲存至: {output_file}")
 
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        shipper_file = os.path.join(script_dir, '廠商名單.xlsx')
+        # Resolve base directory robustly so external files placed next to the exe are found
+        if getattr(sys, 'frozen', False):
+            # Running as PyInstaller one-file executable
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        shipper_file = os.path.join(base_dir, '廠商名單.xlsx')
+        app.log(f"Using base directory: {base_dir} (looking for 廠商名單.xlsx, service_account.json, config.json here)")
         shipper_list = []
         if os.path.exists(shipper_file):
             try:
@@ -133,30 +141,87 @@ def process_files_main(app, api_key, input_files, output_file):
             # Build final DataFrame first
             final_df = build_final_df(all_processed_products, app.log)
 
-            # Check if GUI provided a Google Sheet URL
+            # Check if GUI provided a Google Sheet/Drive URL
             try:
                 sheet_url = app.get_sheet_url()
             except Exception:
                 sheet_url = None
 
             sheet_id = None
+            base_folder_id = None
             if sheet_url:
                 # lightweight local extraction to avoid importing gsheets just for parsing
                 import re
                 m = re.search(r"/d/([a-zA-Z0-9-_]+)", sheet_url)
                 if m:
                     sheet_id = m.group(1)
-                elif re.match(r"^[a-zA-Z0-9-_]{20,}$", sheet_url):
-                    sheet_id = sheet_url
+                else:
+                    m2 = re.search(r"/folders/([a-zA-Z0-9-_]+)", sheet_url)
+                    if m2:
+                        base_folder_id = m2.group(1)
+                    elif re.match(r"^[a-zA-Z0-9-_]{20,}$", sheet_url):
+                        # ambiguous ID: treat as sheet id by default
+                        sheet_id = sheet_url
 
-            if sheet_id:
-                # try to import Google Sheets client lazily and append
+            # If user provided either a sheet id/url or a Drive folder url/id, attempt Google upload
+            if sheet_id or base_folder_id:
                 try:
                     from gsheets import GSheetsClient
-                    script_dir = os.path.dirname(os.path.abspath(__file__))
-                    creds_path = os.path.join(script_dir, 'service_account.json')
-                    gs = GSheetsClient(creds_json_path=creds_path)
-                    gs.append_dataframe(sheet_id, final_df, app.log)
+                    creds_path = os.path.join(base_dir, 'service_account.json')
+                    if not os.path.exists(creds_path):
+                        app.log(f"Google Sheets append skipped: service_account.json not found at {creds_path}. Falling back to Excel output.")
+                        generate_erp_excel(all_processed_products, output_file, app.log)
+                    else:
+                        gs = GSheetsClient(creds_json_path=creds_path)
+                        # group rows by 結單日期 year-month
+                        final_df['__ym'] = final_df['結單日期'].apply(lambda d: '' if not d else pd.to_datetime(d, errors='coerce').strftime('%Y-%m'))
+                        groups = final_df.groupby('__ym')
+                        for ym, group in groups:
+                            subdf = group.drop(columns=['__ym']).reset_index(drop=True)
+                            if not ym:
+                                # No 結單日期: if user provided a sheet_id, append there; otherwise fall back to Excel
+                                if sheet_id:
+                                    target_sheet_id = sheet_id
+                                else:
+                                    app.log("Rows without 結單日期 cannot be routed to a monthly sheet when only a Drive folder was provided. Writing these rows to Excel fallback.")
+                                    group_out = os.path.splitext(output_file)[0] + f"_nogroup.xlsx"
+                                    try:
+                                        subdf.to_excel(group_out, index=False, sheet_name='ERP')
+                                        app.log(f"Rows without 結單日期 saved to Excel fallback: {group_out}")
+                                    except Exception as ee:
+                                        app.log(f"Failed to write Excel fallback for rows without 結單日期: {ee}")
+                                    continue
+                            else:
+                                year, mon = ym.split('-')
+                                try:
+                                    target_sheet_id = gs.ensure_month_sheet(int(year), int(mon), logger=app.log, base_folder_id=base_folder_id)
+                                    if not target_sheet_id:
+                                        app.log(f"Could not resolve monthly sheet for {ym}; falling back to main sheet if available.")
+                                        target_sheet_id = sheet_id
+                                except Exception as e:
+                                    app.log(f"Error ensuring month sheet for {ym}: {e}; falling back to main sheet if available.")
+                                    target_sheet_id = sheet_id
+
+                            if target_sheet_id:
+                                try:
+                                    gs.append_dataframe(target_sheet_id, subdf, app.log)
+                                except Exception as e:
+                                    app.log(f"Append to sheet {target_sheet_id} failed: {e}. Writing this group's data to Excel fallback.")
+                                    group_out = os.path.splitext(output_file)[0] + f"_{ym.replace('-', '')}.xlsx"
+                                    try:
+                                        subdf.to_excel(group_out, index=False, sheet_name='ERP')
+                                        app.log(f"Group data for {ym} saved to Excel fallback: {group_out}")
+                                    except Exception as ee:
+                                        app.log(f"Failed to write Excel fallback for group {ym}: {ee}")
+                            else:
+                                # No target sheet resolved; write fallback
+                                app.log(f"No target sheet resolved for group {ym}. Writing to Excel fallback.")
+                                group_out = os.path.splitext(output_file)[0] + f"_{ym.replace('-', '')}.xlsx"
+                                try:
+                                    subdf.to_excel(group_out, index=False, sheet_name='ERP')
+                                    app.log(f"Group data for {ym} saved to Excel fallback: {group_out}")
+                                except Exception as ee:
+                                    app.log(f"Failed to write Excel fallback for group {ym}: {ee}")
                 except Exception as e:
                     # log and fall back to Excel output
                     app.log(f"Google Sheets append failed or unavailable: {e}. Falling back to Excel output.")

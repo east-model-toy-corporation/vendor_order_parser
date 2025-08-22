@@ -1,0 +1,8 @@
+pandas
+openpyxl
+openai
+gspread
+google-auth
+python-dateutil
+numpy
+google-api-python-client

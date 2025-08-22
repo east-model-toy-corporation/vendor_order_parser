@@ -185,9 +185,7 @@ def build_final_df(all_products, logger):
         except Exception:
             shelf_date = ''
 
-        # compute the Excel row number for formulas: header is row 1, second row is description,
-        # actual data starts at row 3
-        excel_row = len(processed_rows) + 3
+    # actual data starts at row 3 (no need to compute excel_row here)
 
         # formula to extract brand token from 品名 (column L) and lookup brand code from
         # '品牌對照資料查詢' sheet (A:A contains 品牌代號, C:C contains 品名開頭 to match)
