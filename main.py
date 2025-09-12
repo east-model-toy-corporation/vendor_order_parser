@@ -123,9 +123,15 @@ def process_files_main(app, api_key, input_files, output_file):
             try:
                 parsed_json = json.loads(ai_json_str)
                 global_info = parsed_json.get('global_info', {})
-                # 如果檔名有可用的結單日期，優先覆蓋 AI 回傳的值
+                ai_date = global_info.get('結單日期')
+                # 新規則：兩欄都以檔名日期優先
                 if filename_order_date:
                     global_info['結單日期'] = filename_order_date
+                    global_info['廠商結單日期'] = filename_order_date
+                else:
+                    # 無檔名日期時，『廠商結單日期』留存 AI 值（若有），『結單日期』維持 AI 值（後續再做週末調整）
+                    if ai_date:
+                        global_info['廠商結單日期'] = ai_date
                 products = parsed_json.get('products', [])
                 for product in products:
                     all_processed_products.append({"global_info": global_info, "product_data": product})

@@ -117,8 +117,8 @@ class GSheetsClient:
                 start_row = last_row + 1
                 logger(f"'條碼' column not found; fallback determined start_row by any non-empty cell (last non-empty at {last_row}).")
 
-            # prepare rows: target sheet expects 30 columns, with first 3 are ERP, GD, 平台前導
-            expected_cols = 30
+            # prepare rows: match DataFrame column count (now 31 with '廠商結單日期')
+            expected_cols = len(df.columns)
             rows = []
             for _, r in df.iterrows():
                 vals = [str(r.get(c, '')) for c in df.columns]
@@ -130,7 +130,15 @@ class GSheetsClient:
 
             # write explicitly to the computed range
             end_row = start_row + len(rows) - 1
-            verify_range = f"A{start_row}:AD{end_row}"
+            # compute end column letter dynamically
+            def col_letter(n):
+                s = ""
+                while n > 0:
+                    n, rem = divmod(n - 1, 26)
+                    s = chr(65 + rem) + s
+                return s
+            end_col = col_letter(expected_cols)
+            verify_range = f"A{start_row}:{end_col}{end_row}"
             worksheet.update(verify_range, rows, value_input_option='USER_ENTERED')
 
             # read back to verify

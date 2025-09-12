@@ -4,10 +4,10 @@ import re
 from datetime import datetime, date, timedelta
 
 ERP_COLUMNS = [
-    # New required 30-column ERP layout: first three are ERP / GD / 平台前導
+    # ERP layout: first three are ERP / GD / 平台前導
     'ERP', 'GD', '平台前導',
     '寄件廠商', '暫代條碼', '型號', '貨號', '預計發售月份', '上架日期',
-    '結單日期', '條碼', '品名', '品牌', '國際條碼', '起始進價',
+    '結單日期', '廠商結單日期', '條碼', '品名', '品牌', '國際條碼', '起始進價',
     '建議售價', '廠商', '類1', '類2', '類3', '類4', '顏色', '季別',
     '尺1', '尺寸名稱', '特價', '批價', '建檔', '備註', '規格'
 ]
@@ -165,6 +165,17 @@ def build_final_df(all_products, logger):
                         year, month = match.groups()
                         release_month = f"{year}{int(month):02d}"
 
+        # 廠商結單日期：AI 抓到的原始日期（不做週末調整；僅嘗試統一格式）
+        vendor_raw_date = global_info.get('廠商結單日期', '')
+        if isinstance(vendor_raw_date, str) and vendor_raw_date:
+            try:
+                vendor_raw_date_norm = pd.to_datetime(vendor_raw_date).strftime('%Y/%m/%d')
+            except Exception:
+                vendor_raw_date_norm = vendor_raw_date
+        else:
+            vendor_raw_date_norm = ''
+
+        # 結單日期：可被檔名覆寫後再做週末避開調整
         order_date = global_info.get('結單日期', '')
         if isinstance(order_date, str) and order_date:
             try:
@@ -187,14 +198,14 @@ def build_final_df(all_products, logger):
 
     # actual data starts at row 3 (no need to compute excel_row here)
 
-        # formula to extract brand token from 品名 (column L) and lookup brand code from
+        # formula to extract brand token from 品名 (now at column M after inserting 廠商結單日期) and lookup brand code from
         # '品牌對照資料查詢' sheet (A:A contains 品牌代號, C:C contains 品名開頭 to match)
         # Use ROW() + INDIRECT so formula is independent of absolute row when appended.
         # Example formula (works when appended anywhere):
-        # =IFERROR(INDEX('品牌對照資料查詢'!A:A, MATCH(IFERROR(TRIM(LEFT(INDIRECT("L"&ROW()),FIND("|",INDIRECT("L"&ROW()))-1)),TRIM(INDIRECT("L"&ROW()))), '品牌對照資料查詢'!C:C, 0)), "")
+        # =IFERROR(INDEX('品牌對照資料查詢'!A:A, MATCH(IFERROR(TRIM(LEFT(INDIRECT("M"&ROW()),FIND("|",INDIRECT("M"&ROW()))-1)),TRIM(INDIRECT("M"&ROW()))), '品牌對照資料查詢'!C:C, 0)), "")
         brand_formula = (
             "=IFERROR(INDEX('品牌對照資料查詢'!A:A, "
-            "MATCH(IFERROR(TRIM(LEFT(INDIRECT(\"L\"&ROW()),FIND(\"|\",INDIRECT(\"L\"&ROW()))-1)),TRIM(INDIRECT(\"L\"&ROW()))), '品牌對照資料查詢'!C:C, 0)), \"\")"
+            "MATCH(IFERROR(TRIM(LEFT(INDIRECT(\"M\"&ROW()),FIND(\"|\",INDIRECT(\"M\"&ROW()))-1)),TRIM(INDIRECT(\"M\"&ROW()))), '品牌對照資料查詢'!C:C, 0)), \"\")"
         )
 
         # formula to lookup 廠商代碼 from '廠商基本資料' sheet by matching 寄件廠商 in column D
@@ -216,6 +227,7 @@ def build_final_df(all_products, logger):
             '預計發售月份': release_month,
             '上架日期': shelf_date,
             '結單日期': order_date,
+            '廠商結單日期': vendor_raw_date_norm,
             '條碼': p.get('國際條碼', ''),
             '品名': p.get('品名', ''),
             # insert formula so spreadsheet computes 品牌 based on 品名 and 品牌對照資料查詢 sheet

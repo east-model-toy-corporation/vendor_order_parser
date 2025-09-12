@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\東海\\Desktop\\Project\\11【商品上架完整流程】\\程式\\Python抓廠商訂單\\ChatGPTImage_cat.png'],
+    icon=['icon.ico'],
 )
