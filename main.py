@@ -124,14 +124,13 @@ def process_files_main(app, api_key, input_files, output_file):
                 parsed_json = json.loads(ai_json_str)
                 global_info = parsed_json.get('global_info', {})
                 ai_date = global_info.get('結單日期')
-                # 新規則：兩欄都以檔名日期優先
-                if filename_order_date:
-                    global_info['結單日期'] = filename_order_date
-                    global_info['廠商結單日期'] = filename_order_date
-                else:
-                    # 無檔名日期時，『廠商結單日期』留存 AI 值（若有），『結單日期』維持 AI 值（後續再做週末調整）
-                    if ai_date:
-                        global_info['廠商結單日期'] = ai_date
+                # 新命名規則：J=內部結單日期（內部調整用），K=結單日期（來源/外部）
+                chosen = filename_order_date if filename_order_date else ai_date
+                if chosen:
+                    # K 欄：來源日期（檔名優先，否則 AI）
+                    global_info['結單日期'] = chosen
+                    # J 欄：內部結單日期（與來源相同，後續在 data_processor 中再避開週末）
+                    global_info['內部結單日期'] = chosen
                 products = parsed_json.get('products', [])
                 for product in products:
                     all_processed_products.append({"global_info": global_info, "product_data": product})
@@ -179,23 +178,23 @@ def process_files_main(app, api_key, input_files, output_file):
                         generate_erp_excel(all_processed_products, output_file, app.log)
                     else:
                         gs = GSheetsClient(creds_json_path=creds_path)
-                        # group rows by 結單日期 year-month
-                        final_df['__ym'] = final_df['結單日期'].apply(lambda d: '' if not d else pd.to_datetime(d, errors='coerce').strftime('%Y-%m'))
+                        # group rows by 內部結單日期 year-month（J 欄）
+                        final_df['__ym'] = final_df['內部結單日期'].apply(lambda d: '' if not d else pd.to_datetime(d, errors='coerce').strftime('%Y-%m'))
                         groups = final_df.groupby('__ym')
                         for ym, group in groups:
                             subdf = group.drop(columns=['__ym']).reset_index(drop=True)
                             if not ym:
-                                # No 結單日期: if user provided a sheet_id, append there; otherwise fall back to Excel
+                                # No 內部結單日期: if user provided a sheet_id, append there; otherwise fall back to Excel
                                 if sheet_id:
                                     target_sheet_id = sheet_id
                                 else:
-                                    app.log("Rows without 結單日期 cannot be routed to a monthly sheet when only a Drive folder was provided. Writing these rows to Excel fallback.")
+                                    app.log("Rows without 內部結單日期 cannot be routed to a monthly sheet when only a Drive folder was provided. Writing these rows to Excel fallback.")
                                     group_out = os.path.splitext(output_file)[0] + f"_nogroup.xlsx"
                                     try:
                                         subdf.to_excel(group_out, index=False, sheet_name='ERP')
-                                        app.log(f"Rows without 結單日期 saved to Excel fallback: {group_out}")
+                                        app.log(f"Rows without 內部結單日期 saved to Excel fallback: {group_out}")
                                     except Exception as ee:
-                                        app.log(f"Failed to write Excel fallback for rows without 結單日期: {ee}")
+                                        app.log(f"Failed to write Excel fallback for rows without 內部結單日期: {ee}")
                                     continue
                             else:
                                 year, mon = ym.split('-')

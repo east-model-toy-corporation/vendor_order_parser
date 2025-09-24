@@ -117,14 +117,20 @@ class GSheetsClient:
                 start_row = last_row + 1
                 logger(f"'條碼' column not found; fallback determined start_row by any non-empty cell (last non-empty at {last_row}).")
 
-            # prepare rows: match DataFrame column count (now 31 with '廠商結單日期')
-            expected_cols = len(df.columns)
+            # prepare rows based on the SHEET HEADER order to avoid misalignment
+            sheet_header = header if values_before else []
+            if not sheet_header:
+                # If header unavailable, fall back to DataFrame columns
+                sheet_header = list(df.columns)
+            expected_cols = len(sheet_header)
             rows = []
             for _, r in df.iterrows():
-                vals = [str(r.get(c, '')) for c in df.columns]
+                # Build row by mapping df values to each header column name
+                vals = [str(r.get(col_name, '')) for col_name in sheet_header]
+                # ensure correct length
                 if len(vals) < expected_cols:
                     vals = vals + [''] * (expected_cols - len(vals))
-                else:
+                elif len(vals) > expected_cols:
                     vals = vals[:expected_cols]
                 rows.append(vals)
 
