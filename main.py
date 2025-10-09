@@ -119,7 +119,17 @@ def process_files_main(app, api_key, input_files, output_file):
             if not ai_json_str:
                 app.log(f"AI 提取失敗，跳過檔案 {os.path.basename(file_path)}。")
                 continue
-
+            
+            # 無論 AI 回應是否有效，都先儲存一份原始檔，方便追蹤
+            try:
+                ai_response_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_ai_response.json"
+                ai_response_path = os.path.join(output_dir, ai_response_filename)
+                with open(ai_response_path, 'w', encoding='utf-8') as f:
+                    f.write(ai_json_str)
+                app.log(f"AI 原始回應已儲存至: {ai_response_path}")
+            except Exception as e:
+                app.log(f"警告：儲存 AI 原始回應時發生錯誤: {e}")
+                
             try:
                 parsed_json = json.loads(ai_json_str)
                 global_info = parsed_json.get('global_info', {})
@@ -135,11 +145,7 @@ def process_files_main(app, api_key, input_files, output_file):
                 for product in products:
                     all_processed_products.append({"global_info": global_info, "product_data": product})
             except json.JSONDecodeError:
-                app.log(f"錯誤: AI 回傳的不是有效的 JSON。")
-                raw_data_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_invalid_response.txt"
-                raw_data_path = os.path.join(output_dir, raw_data_filename)
-                with open(raw_data_path, 'w', encoding='utf-8') as f: f.write(ai_json_str)
-                app.log(f"無效的 AI 回應已儲存至: {raw_data_path}")
+                app.log(f"錯誤: AI 回傳的不是有效的 JSON 格式，已跳過此檔案的資料處理。")
                 continue
         
         if all_processed_products:
