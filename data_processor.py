@@ -105,25 +105,24 @@ def adjust_order_date(date_str, logger=None):
         candidate = back_to_weekday(candidate)
     return candidate.strftime('%Y/%m/%d')
 
-def generate_erp_excel(all_products, output_path, logger):
-    """Generates the final ERP Excel file from the combined list of processed products."""
-    if not all_products:
+def generate_erp_excel(final_df, output_path, logger):
+    """Generates the final ERP Excel file from a pre-built DataFrame."""
+    if final_df.empty:
         logger("No products to process for the final ERP output.")
         return
 
-    logger("Formatting data for the final ERP output...")
-
-    # build the DataFrame using helper
-    final_df = build_final_df(all_products, logger)
+    logger("Saving data to the final ERP Excel file...")
 
     try:
+        # Convert all data to string type before saving to prevent auto-formatting
+        final_df = final_df.astype(str)
         final_df.to_excel(output_path, index=False, sheet_name='ERP')
         logger(f"Success! Final report saved to:\n{output_path}")
     except Exception as e:
         logger(f"Error saving final Excel file: {e}")
 
 
-def build_final_df(all_products, logger):
+def build_final_df(all_products, brand_map, category1_map, category1_keywords_sorted, logger):
     """Builds and returns the final ERP DataFrame from processed products.
 
     This helper is used by both Excel output and Google Sheets append.
@@ -196,23 +195,80 @@ def build_final_df(all_products, logger):
         except Exception:
             shelf_date = ''
 
-    # actual data starts at row 3 (no need to compute excel_row here)
-
-    # formula to extract brand token from 品名 (now at column M after inserting 結單日期) and lookup brand code from
-        # '品牌對照資料查詢' sheet (A:A contains 品牌代號, C:C contains 品名開頭 to match)
-        # Use ROW() + INDIRECT so formula is independent of absolute row when appended.
-        # Example formula (works when appended anywhere):
-        # =IFERROR(INDEX('品牌對照資料查詢'!A:A, MATCH(IFERROR(TRIM(LEFT(INDIRECT("M"&ROW()),FIND("|",INDIRECT("M"&ROW()))-1)),TRIM(INDIRECT("M"&ROW()))), '品牌對照資料查詢'!C:C, 0)), "")
         brand_formula = (
-            "=IFERROR(INDEX('品牌對照資料查詢'!A:A, "
-            "MATCH(IFERROR(TRIM(LEFT(INDIRECT(\"M\"&ROW()),FIND(\"|\",INDIRECT(\"M\"&ROW()))-1)),TRIM(INDIRECT(\"M\"&ROW()))), '品牌對照資料查詢'!C:C, 0)), \"\")"
+            '=IFERROR(INDEX(\'品牌對照資料查詢\'!A:A, MATCH(IFERROR(TRIM(LEFT(INDIRECT("M"&ROW())),FIND("|",INDIRECT("M"&ROW()))-1)),TRIM(INDIRECT("M"&ROW()))), \'品牌對照資料查詢\'!C:C, 0)), "")'
         )
 
+        # --- New Brand and Product Name Logic ---
+        final_display_name = None
+        final_brand_code = brand_formula # Default to formula
+
+        ai_brand_name = p.get('偵測到的品牌') # This is the keyword from Col A
+        override_brand_info = p.get('final_brand_info') # This is the dict {'code':..., 'display_name':...}
+
+        brand_info_to_use = None
+
+        # Priority 1: AI Detection
+        if ai_brand_name and brand_map:
+            brand_info = brand_map.get(str(ai_brand_name).lower())
+            if brand_info:
+                brand_info_to_use = brand_info
+                logger(f"為商品 '{p.get('品名', 'N/A')[:20]}...' 找到AI偵測的品牌: {ai_brand_name}")
+        # Priority 2: File Override Fallback
+        elif override_brand_info:
+            brand_info_to_use = override_brand_info
+            logger(f"為商品 '{p.get('品名', 'N/A')[:20]}...' 套用檔案級別品牌。")
+
+        if brand_info_to_use:
+            final_brand_code = brand_info_to_use.get('code')
+            # Get the display name from Col D
+            final_display_name = brand_info_to_use.get('display_name') 
+
+        # Construct the new product name
+        original_product_name = p.get('品名', '')
+        new_product_name = original_product_name
+        # Only prepend if the display name (from Col D) is not null/empty
+        if final_display_name:
+            new_product_name = f"{final_display_name} {original_product_name}"
+        
+        # --- Begin Category Matching & Name Refactoring ---
+        cat1_value = ''
+        is_cat1_set = False
+
+        # Create a combined string for a wider search scope for this product
+        search_string = f"{new_product_name} {p.get('貨號', '')} {ai_brand_name if ai_brand_name else ''}"
+        
+        # Use the full list of keywords, which is already sorted by length descending.
+        # Loop through all keywords without breaking to allow multiple transformations
+        if new_product_name: # Check if there is a product name to process
+            for keyword in category1_keywords_sorted:
+                if keyword in search_string:
+                    mapping = category1_map[keyword]
+                    command = mapping.get('command', '')
+                    suffix = mapping.get('suffix', '')
+
+                    # Set cat1_value only on the first (longest) match
+                    if not is_cat1_set:
+                        cat1_value = mapping.get('類1', '')
+                        is_cat1_set = True
+
+                    if command == '保留':
+                        logger(f"特殊規則: 品名 '{new_product_name[:20]}...' 命中關鍵字 '{keyword}'，保留並附加後綴。")
+                        if suffix:
+                            new_product_name = f"{new_product_name.strip()} {suffix}".strip()
+                    else:
+                        logger(f"一般規則: 品名 '{new_product_name[:20]}...' 命中關鍵字 '{keyword}'，刪除並附加後綴。")
+                        temp_name = new_product_name.replace(keyword, '', 1)
+                        if suffix:
+                            new_product_name = f"{temp_name.strip()} {suffix}".strip()
+                        else:
+                            new_product_name = temp_name.strip()
+
+        # --- End Category Matching & Name Refactoring ---
+
         # formula to lookup 廠商代碼 from '廠商基本資料' sheet by matching 寄件廠商 in column D
-        # Use INDIRECT("D"&ROW()) so the formula matches the same row regardless of where appended.
-        # =IFERROR(INDEX('廠商基本資料'!A:A, MATCH(INDIRECT("D"&ROW()), '廠商基本資料'!D:D, 0)), "")
         vendor_formula = (
-            "=IFERROR(INDEX('廠商基本資料'!A:A, MATCH(INDIRECT(\"D\"&ROW()), '廠商基本資料'!D:D, 0)), \"\")"
+            '=IFERROR(INDEX(\'廠商基本資料\'!A:A, MATCH(INDIRECT("D"&ROW()), \'廠商基本資料\'!D:D, 0)), "")'
         )
 
         new_row = {
@@ -229,14 +285,13 @@ def build_final_df(all_products, logger):
             '內部結單日期': order_date,
             '結單日期': source_date_norm,
             '條碼': p.get('國際條碼', ''),
-            '品名': p.get('品名', ''),
-            # insert formula so spreadsheet computes 品牌 based on 品名 and 品牌對照資料查詢 sheet
-            '品牌': brand_formula,
+            '品名': new_product_name,
+            '品牌': final_brand_code,
             '國際條碼': '',
             '起始進價': p.get('起始進價', ''),
             '建議售價': p.get('建議售價', ''),
-            # insert formula so spreadsheet computes 廠商 (廠商代碼) based on 寄件廠商 and 廠商基本資料 sheet
-            '廠商': vendor_formula, '類1': '', '類2': '', '類3': '', '類4': '',
+            '廠商': vendor_formula, 
+            '類1': cat1_value, '類2': '', '類3': '', '類4': '',
             '顏色': '', '季別': '',
             '尺1': 'F', '尺寸名稱': 'F',
             '特價': '', '批價': '', '建檔': '',

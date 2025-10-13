@@ -8,7 +8,7 @@ import tkinter as tk
 
 from gui import App
 from ai_api import call_ai_to_extract_data
-from data_processor import convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename
+from data_processor import convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename, ERP_COLUMNS
 from data_processor import build_final_df
 
 def process_files_main(app, api_key, input_files, output_file):
@@ -84,12 +84,101 @@ def process_files_main(app, api_key, input_files, output_file):
         else:
             app.log("警告: '廠商名單.xlsx' 不存在。")
 
+        # Load brand map from '品牌對照資料查詢.xlsx' (Cols A, B, D)
+        brand_map = {}
+        brand_keywords = []
+        brand_ref_file = os.path.join(base_dir, '品牌對照資料查詢.xlsx')
+        if os.path.exists(brand_ref_file):
+            try:
+                # Use headers=None and iloc to be robust against missing headers
+                brand_df = pd.read_excel(brand_ref_file, sheet_name=0, header=None)
+                brand_keywords = brand_df.iloc[:, 0].dropna().astype(str).tolist()
+                
+                for _, row in brand_df.iterrows():
+                    keyword = row.iloc[0] # Column A
+                    code = row.iloc[1]    # Column B
+                    
+                    # Column D for display name, check if it exists
+                    display_name = None
+                    if brand_df.shape[1] > 3:
+                        display_name = row.iloc[3]
+
+                    if pd.notna(keyword) and pd.notna(code):
+                        brand_map[str(keyword).lower()] = {
+                            'code': str(code),
+                            'display_name': str(display_name) if pd.notna(display_name) else None
+                        }
+                app.log(f"成功讀取 {len(brand_map)} 個品牌關鍵字與對照資料。")
+            except Exception as e:
+                app.log(f"讀取 '品牌對照資料查詢.xlsx' 時發生錯誤: {e}")
+        else:
+            app.log("警告: '品牌對照資料查詢.xlsx' 不存在，將無法自動偵測品牌。")
+
+        # Load category map from '類別1資料查詢.xlsx'
+        category1_map = {}
+        category1_keywords_sorted = []
+        category1_ref_file = os.path.join(base_dir, '類別1資料查詢.xlsx')
+        if os.path.exists(category1_ref_file):
+            try:
+                cat1_df = pd.read_excel(category1_ref_file, sheet_name=0, header=None)
+                # Sort keywords by length descending to match specific terms first
+                keywords = cat1_df.iloc[:, 0].dropna().astype(str).tolist()
+                category1_keywords_sorted = sorted(keywords, key=len, reverse=True)
+
+                for _, row in cat1_df.iterrows():
+                    keyword = row.iloc[0]
+                    cat1_val = row.iloc[1] if cat1_df.shape[1] > 1 else None
+                    suffix = row.iloc[3] if cat1_df.shape[1] > 3 else None
+                    command = row.iloc[5] if cat1_df.shape[1] > 5 else None # Column F
+
+                    if pd.notna(keyword):
+                        category1_map[str(keyword)] = {
+                            '類1': str(cat1_val) if pd.notna(cat1_val) else '',
+                            'suffix': str(suffix) if pd.notna(suffix) else '',
+                            'command': str(command) if pd.notna(command) else ''
+                        }
+                app.log(f"成功讀取 {len(category1_map)} 個類別關鍵字與對照資料。")
+            except Exception as e:
+                app.log(f"讀取 '類別1資料查詢.xlsx' 時發生錯誤: {e}")
+        else:
+            app.log("警告: '類別1資料查詢.xlsx' 不存在，將無法自動處理類別與品名重構。")
+
         all_processed_products = []
         output_dir = os.path.dirname(output_file)
 
         for i, file_path in enumerate(input_files):
             app.log(f"\n--- 處理檔案 {i+1}/{len(input_files)}: {os.path.basename(file_path)} ---")
             
+            # --- Begin new brand scanning logic ---
+            file_brand_override = None
+            all_cells = None
+            try:
+                raw_df = pd.read_excel(file_path, sheet_name=0, header=None).astype(str)
+                found_brands = set()
+                
+                # Flatten all cell values into a single series for efficient searching
+                all_cells = raw_df.unstack().dropna().astype(str).str.lower()
+                
+                # Case-insensitive search for each keyword
+                for keyword in brand_keywords:
+                    if keyword and str(keyword).strip(): # Ensure keyword is not empty
+                        # Check if keyword exists in any cell
+                        if all_cells.str.contains(keyword.lower(), na=False, regex=False).any():
+                            found_brands.add(keyword)
+                
+                app.log(f"在檔案中掃描到 {len(found_brands)} 個品牌: {found_brands if found_brands else '無'}")
+
+                if len(found_brands) == 1:
+                    single_brand = found_brands.pop()
+                    brand_info = brand_map.get(single_brand.lower())
+                    if brand_info:
+                        file_brand_override = brand_info.get('code')
+                        app.log(f"啟用單一品牌覆寫模式，將使用品牌代碼: {file_brand_override}")
+
+            except Exception as e:
+                app.log(f"掃描檔案品牌時發生錯誤: {e}")
+            # --- End new brand scanning logic ---
+
             csv_content = convert_excel_to_csv(file_path, app.log)
             if not csv_content: continue
             # 優先嘗試從檔名擷取結單日期
@@ -115,24 +204,20 @@ def process_files_main(app, api_key, input_files, output_file):
             else:
                 shipper_list_for_call = shipper_list
 
-            ai_json_str = call_ai_to_extract_data(client, csv_content, shipper_list_for_call, app.log)
+            ai_json_str = call_ai_to_extract_data(client, csv_content, shipper_list_for_call, brand_keywords, category1_keywords_sorted, app.log)
             if not ai_json_str:
                 app.log(f"AI 提取失敗，跳過檔案 {os.path.basename(file_path)}。")
                 continue
-            
-            # 無論 AI 回應是否有效，都先儲存一份原始檔，方便追蹤
-            try:
-                ai_response_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_ai_response.json"
-                ai_response_path = os.path.join(output_dir, ai_response_filename)
-                with open(ai_response_path, 'w', encoding='utf-8') as f:
-                    f.write(ai_json_str)
-                app.log(f"AI 原始回應已儲存至: {ai_response_path}")
-            except Exception as e:
-                app.log(f"警告：儲存 AI 原始回應時發生錯誤: {e}")
-                
+
             try:
                 parsed_json = json.loads(ai_json_str)
                 global_info = parsed_json.get('global_info', {})
+
+                # Overwrite shipper with filename-based one if it exists, ensuring priority.
+                if filename_based_shipper:
+                    app.log(f"覆寫AI結果：強制使用檔名找到的寄件廠商 '{filename_based_shipper}'。")
+                    global_info['寄件廠商'] = filename_based_shipper
+
                 ai_date = global_info.get('結單日期')
                 # 新命名規則：J=內部結單日期（內部調整用），K=結單日期（來源/外部）
                 chosen = filename_order_date if filename_order_date else ai_date
@@ -142,15 +227,43 @@ def process_files_main(app, api_key, input_files, output_file):
                     # J 欄：內部結單日期（與來源相同，後續在 data_processor 中再避開週末）
                     global_info['內部結單日期'] = chosen
                 products = parsed_json.get('products', [])
-                for product in products:
-                    all_processed_products.append({"global_info": global_info, "product_data": product})
+
+                # --- Begin Python-side validation ---
+                validated_products = []
+                for p in products:
+                    start_price = p.get('起始進價')
+                    rec_price = p.get('建議售價')
+                    # Ensure both prices exist, are not empty strings, and are not just 'nan' or similar placeholders.
+                    if start_price and str(start_price).strip() and rec_price and str(rec_price).strip():
+                        validated_products.append(p)
+                    else:
+                        app.log(f"過濾掉商品 '{p.get('品名', 'N/A')[:20]}...' 因為缺少有效的價格資訊。")
+                
+                products = validated_products # Replace original products with the validated list
+                # --- End Python-side validation ---
+
+                # Analyze detected brands for this file and apply overrides
+                # New logic: If a file-level brand override is set, apply it to all products.
+                if file_brand_override:
+                    app.log(f"套用檔案級別的品牌覆寫: {file_brand_override}")
+                    for p in products:
+                        p['final_brand_info'] = {'name': single_brand, 'code': file_brand_override}
+
+                # Append products to the master list
+                for p in products:
+                    all_processed_products.append({"global_info": global_info, "product_data": p})
+
             except json.JSONDecodeError:
-                app.log(f"錯誤: AI 回傳的不是有效的 JSON 格式，已跳過此檔案的資料處理。")
+                app.log(f"錯誤: AI 回傳的不是有效的 JSON。")
+                raw_data_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_invalid_response.txt"
+                raw_data_path = os.path.join(output_dir, raw_data_filename)
+                with open(raw_data_path, 'w', encoding='utf-8') as f: f.write(ai_json_str)
+                app.log(f"無效的 AI 回應已儲存至: {raw_data_path}")
                 continue
         
         if all_processed_products:
             # Build final DataFrame first
-            final_df = build_final_df(all_processed_products, app.log)
+            final_df = build_final_df(all_processed_products, brand_map, category1_map, category1_keywords_sorted, app.log)
 
             # Check if GUI provided a Google Sheet/Drive URL
             try:
@@ -179,13 +292,17 @@ def process_files_main(app, api_key, input_files, output_file):
                 try:
                     from gsheets import GSheetsClient
                     creds_path = os.path.join(base_dir, 'service_account.json')
+                    brand_ref_path = os.path.join(base_dir, '品牌對照資料查詢.xlsx')
+                    vendor_ref_path = os.path.join(base_dir, '廠商基本資料.xlsx')
+
                     if not os.path.exists(creds_path):
                         app.log(f"Google Sheets append skipped: service_account.json not found at {creds_path}. Falling back to Excel output.")
                         generate_erp_excel(all_processed_products, output_file, app.log)
                     else:
                         gs = GSheetsClient(creds_json_path=creds_path)
                         # group rows by 內部結單日期 year-month（J 欄）
-                        final_df['__ym'] = final_df['內部結單日期'].apply(lambda d: '' if not d else pd.to_datetime(d, errors='coerce').strftime('%Y-%m'))
+                        final_df['__ym'] = pd.to_datetime(final_df['內部結單日期'], errors='coerce').dt.strftime('%Y-%m').fillna('')
+
                         groups = final_df.groupby('__ym')
                         for ym, group in groups:
                             subdf = group.drop(columns=['__ym']).reset_index(drop=True)
@@ -197,6 +314,7 @@ def process_files_main(app, api_key, input_files, output_file):
                                     app.log("Rows without 內部結單日期 cannot be routed to a monthly sheet when only a Drive folder was provided. Writing these rows to Excel fallback.")
                                     group_out = os.path.splitext(output_file)[0] + f"_nogroup.xlsx"
                                     try:
+                                        subdf = subdf.astype(str)
                                         subdf.to_excel(group_out, index=False, sheet_name='ERP')
                                         app.log(f"Rows without 內部結單日期 saved to Excel fallback: {group_out}")
                                     except Exception as ee:
@@ -215,6 +333,9 @@ def process_files_main(app, api_key, input_files, output_file):
 
                             if target_sheet_id:
                                 try:
+                                    # Ensure reference sheets exist before appending
+                                    # gs.ensure_reference_sheet(target_sheet_id, '品牌對照資料查詢', brand_ref_path, ERP_COLUMNS.index('品牌'), app.log)
+                                    # gs.ensure_reference_sheet(target_sheet_id, '廠商基本資料', vendor_ref_path, ERP_COLUMNS.index('廠商'), app.log)
                                     gs.append_dataframe(target_sheet_id, subdf, app.log)
                                 except Exception as e:
                                     app.log(f"Append to sheet {target_sheet_id} failed: {e}. Writing this group's data to Excel fallback.")
@@ -236,9 +357,9 @@ def process_files_main(app, api_key, input_files, output_file):
                 except Exception as e:
                     # log and fall back to Excel output
                     app.log(f"Google Sheets append failed or unavailable: {e}. Falling back to Excel output.")
-                    generate_erp_excel(all_processed_products, output_file, app.log)
+                    generate_erp_excel(final_df, output_file, app.log)
             else:
-                generate_erp_excel(all_processed_products, output_file, app.log)
+                generate_erp_excel(final_df, output_file, app.log)
         else:
             app.log("所有檔案處理完畢，但沒有找到任何有效的商品資料可供輸出。")
         
