@@ -56,7 +56,7 @@ You are an expert data extraction AI. Your task is to analyze the following CSV 
 """
     return prompt
 
-def call_ai_to_extract_data(client, csv_data, shipper_list, brand_keywords, category_keywords, logger):
+def call_ai_to_extract_data(client, csv_data, shipper_list, brand_keywords, category_keywords, logger, debug_path_prefix=None):
     """Calls the AI to extract structured JSON from CSV data."""
     if not client:
         logger("OpenAI client not configured. Please set your OPENAI_API_KEY environment variable.")
@@ -66,6 +66,17 @@ def call_ai_to_extract_data(client, csv_data, shipper_list, brand_keywords, cate
         return None
 
     prompt = get_extraction_prompt(csv_data, shipper_list, brand_keywords, category_keywords)
+
+    # Save the prompt for user inspection if a path is provided
+    if debug_path_prefix:
+        try:
+            prompt_filename = f"{debug_path_prefix}_prompt.txt"
+            with open(prompt_filename, 'w', encoding='utf-8') as f:
+                f.write(prompt)
+            logger(f"AI 請求內容已儲存至: {prompt_filename}")
+        except Exception as e:
+            logger(f"儲存 AI 請求內容時發生錯誤: {e}")
+    
     logger("Calling OpenAI API for data extraction...")
 
     try:

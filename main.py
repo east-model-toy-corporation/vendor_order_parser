@@ -12,6 +12,10 @@ from data_processor import convert_excel_to_csv, generate_erp_excel, extract_ord
 from data_processor import build_final_df
 
 def process_files_main(app, api_key, input_files, output_file):
+    # --- DEBUG FLAG ---
+    # Set to True to save the prompt and AI response for each file.
+    SAVE_DEBUG_FILES = False
+    # --- END DEBUG FLAG ---
     try:
         client = openai.OpenAI(api_key=api_key)
         app.log("OpenAI API Key 已設定。")
@@ -204,10 +208,33 @@ def process_files_main(app, api_key, input_files, output_file):
             else:
                 shipper_list_for_call = shipper_list
 
-            ai_json_str = call_ai_to_extract_data(client, csv_content, shipper_list_for_call, brand_keywords, category1_keywords_sorted, app.log)
+            debug_path_prefix = None
+            if SAVE_DEBUG_FILES:
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                debug_path_prefix = os.path.normpath(os.path.join(output_dir, base_name))
+
+            ai_json_str = call_ai_to_extract_data(
+                client, csv_content, shipper_list_for_call, brand_keywords, category1_keywords_sorted, app.log,
+                debug_path_prefix=debug_path_prefix
+            )
             if not ai_json_str:
                 app.log(f"AI 提取失敗，跳過檔案 {os.path.basename(file_path)}。")
                 continue
+
+            if SAVE_DEBUG_FILES and debug_path_prefix:
+                # Save the raw AI response for user inspection
+                try:
+                    ai_response_filename = f"{debug_path_prefix}_ai_response.json"
+                    with open(ai_response_filename, 'w', encoding='utf-8') as f:
+                        # Try to pretty-print if it's valid JSON, otherwise save as is
+                        try:
+                            parsed = json.loads(ai_json_str)
+                            json.dump(parsed, f, ensure_ascii=False, indent=4)
+                        except json.JSONDecodeError:
+                            f.write(ai_json_str)
+                    app.log(f"AI 原始回應已儲存至: {ai_response_filename}")
+                except Exception as e:
+                    app.log(f"儲存 AI 原始回應時發生錯誤: {e}")
 
             try:
                 parsed_json = json.loads(ai_json_str)
