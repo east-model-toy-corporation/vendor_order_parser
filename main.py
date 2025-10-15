@@ -44,9 +44,9 @@ def process_files_main(app, api_key, input_files, output_file):
         app.log(f"輸出檔案將儲存至: {output_file}")
 
         # Resolve base directory robustly so external files placed next to the exe are found
-        if getattr(sys, "frozen", False):
-            # Running as PyInstaller one-file executable
-            base_dir = os.path.dirname(sys.executable)
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            # Running in a PyInstaller bundle (one-file or one-folder)
+            base_dir = sys._MEIPASS
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
 
