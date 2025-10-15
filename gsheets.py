@@ -1,5 +1,4 @@
 import re
-import json
 import os
 from typing import Optional
 import gspread
@@ -186,7 +185,8 @@ class GSheetsClient:
             resp = drive.files().list(q=q, spaces='drive', fields='files(id,name)', pageSize=10).execute()
             files = resp.get('files', [])
             if not files:
-                if logger: logger(f"Base folder '{base_folder_name}' not found on Drive.")
+                if logger:
+                    logger(f"Base folder '{base_folder_name}' not found on Drive.")
                 return None
             base_folder_id = files[0]['id']
 
@@ -197,7 +197,8 @@ class GSheetsClient:
         year_folder_id = year_files[0]['id'] if year_files else None
 
         if year_folder_id:
-            if logger: logger(f"Found year folder '{year}' (id: {year_folder_id}).")
+            if logger:
+                logger(f"Found year folder '{year}' (id: {year_folder_id}).")
         else:
             # create the year folder under base_folder
             try:
@@ -208,9 +209,11 @@ class GSheetsClient:
                 }
                 created = drive.files().create(body=folder_body, fields='id,name').execute()
                 year_folder_id = created.get('id')
-                if logger: logger(f"Created year folder '{year}' (id: {year_folder_id}) under base folder.")
+                if logger:
+                    logger(f"Created year folder '{year}' (id: {year_folder_id}) under base folder.")
             except Exception as e:
-                if logger: logger(f"Failed to create year folder '{year}': {e}")
+                if logger:
+                    logger(f"Failed to create year folder '{year}': {e}")
                 raise
 
         # if year folder exists, search for target spreadsheet inside it
@@ -219,7 +222,8 @@ class GSheetsClient:
             resp = drive.files().list(q=q_sheet, spaces='drive', fields='files(id,name)', pageSize=5).execute()
             found = resp.get('files', [])
             if found:
-                if logger: logger(f"Found existing monthly sheet '{target_name}' in folder '{year}'.")
+                if logger:
+                    logger(f"Found existing monthly sheet '{target_name}' in folder '{year}'.")
                 return found[0]['id']
 
         # not found in year folder: look for template in base folder
@@ -227,7 +231,8 @@ class GSheetsClient:
         resp = drive.files().list(q=q_template, spaces='drive', fields='files(id,name)', pageSize=5).execute()
         templates = resp.get('files', [])
         if not templates:
-            if logger: logger("No template spreadsheet named like '複製用範本-究極進化' found in base folder.")
+            if logger:
+                logger("No template spreadsheet named like '複製用範本-究極進化' found in base folder.")
             return None
 
         template_id = templates[0]['id']
@@ -259,5 +264,6 @@ class GSheetsClient:
                     logger(f"Failed to copy template for monthly sheet due to storage quota: {e}")
                 raise
             else:
-                if logger: logger(f"Failed to copy template for monthly sheet: {e}")
+                if logger:
+                    logger(f"Failed to copy template for monthly sheet: {e}")
                 raise

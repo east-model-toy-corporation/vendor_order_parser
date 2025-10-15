@@ -4,19 +4,15 @@ import sys
 import json
 import pandas as pd
 import openai
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 import tkinter as tk
 
 from gui import App
 from ai_api import call_ai_for_enrichment
-from data_processor import extract_products_from_excel, convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename, ERP_COLUMNS
+from data_processor import extract_products_from_excel, generate_erp_excel, extract_order_date_from_filename
 from data_processor import build_final_df
 
 def process_files_main(app, api_key, input_files, output_file):
-    # --- MOCK AI RESPONSE FLAG ---
-    # Set to True to skip OpenAI call and use a local file instead.
-    USE_MOCK_AI_RESPONSE = False
-    # --- END MOCK FLAG ---
 
     # --- DEBUG FLAG ---
     # Set to True to save the prompt and AI response for each file.
@@ -51,8 +47,6 @@ def process_files_main(app, api_key, input_files, output_file):
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # Define mock response path relative to base_dir
-        MOCK_AI_RESPONSE_PATH = os.path.join(base_dir, 'simple_crawler', 'data', 'inputs', 'example_ai_response.json')
 
         shipper_file = os.path.join(base_dir, '廠商名單.xlsx')
         app.log(f"Using base directory: {base_dir} (looking for 廠商名單.xlsx, service_account.json, config.json here)")
@@ -214,7 +208,7 @@ def process_files_main(app, api_key, input_files, output_file):
             global_info = {}
 
             if not ai_json_str:
-                app.log(f"AI 豐富化失敗，將僅使用 Python 提取的資料繼續處理。")
+                app.log("AI 豐富化失敗，將僅使用 Python 提取的資料繼續處理。")
                 enriched_products = pre_extracted_products # Fallback to python-extracted data
             else:
                 if SAVE_DEBUG_FILES and debug_path_prefix:
@@ -257,12 +251,12 @@ def process_files_main(app, api_key, input_files, output_file):
                     app.log("成功合併 AI 的分析結果。")
 
                 except json.JSONDecodeError:
-                    app.log(f"錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")
+                    app.log("錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")
                     enriched_products = pre_extracted_products # Fallback
                     global_info = {}
 
                 except json.JSONDecodeError:
-                    app.log(f"錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")
+                    app.log("錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")
                     enriched_products = pre_extracted_products
                     global_info = {}
 
@@ -325,8 +319,6 @@ def process_files_main(app, api_key, input_files, output_file):
                 try:
                     from gsheets import GSheetsClient
                     creds_path = os.path.join(base_dir, 'service_account.json')
-                    brand_ref_path = os.path.join(base_dir, '品牌對照資料查詢.xlsx')
-                    vendor_ref_path = os.path.join(base_dir, '廠商基本資料.xlsx')
 
                     if not os.path.exists(creds_path):
                         app.log(f"Google Sheets append skipped: service_account.json not found at {creds_path}. Falling back to Excel output.")
@@ -345,7 +337,7 @@ def process_files_main(app, api_key, input_files, output_file):
                                     target_sheet_id = sheet_id
                                 else:
                                     app.log("Rows without 內部結單日期 cannot be routed to a monthly sheet when only a Drive folder was provided. Writing these rows to Excel fallback.")
-                                    group_out = os.path.splitext(output_file)[0] + f"_nogroup.xlsx"
+                                    group_out = os.path.splitext(output_file)[0] + "_nogroup.xlsx"
                                     try:
                                         subdf = subdf.astype(str)
                                         subdf.to_excel(group_out, index=False, sheet_name='ERP')

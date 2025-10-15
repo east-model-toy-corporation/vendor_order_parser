@@ -1,4 +1,3 @@
-import openai
 import json
 
 def get_enrichment_prompt(full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords):
