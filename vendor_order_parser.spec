@@ -5,7 +5,11 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('廠商名單.xlsx', '.'),
+        ('品牌對照資料查詢.xlsx', '.'),
+        ('類別1資料查詢.xlsx', '.')
+    ],
     hiddenimports=['gspread', 'google.oauth2.credentials'],
     hookspath=[],
     hooksconfig={},
