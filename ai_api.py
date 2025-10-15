@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 
 def get_enrichment_prompt(
@@ -7,6 +8,7 @@ def get_enrichment_prompt(
     shipper_list,
     brand_keywords,
     category_keywords,
+    current_date_str,
 ):
     """
     Generates a prompt for the AI to enrich pre-extracted data.
@@ -32,7 +34,7 @@ You are an expert data enrichment AI. I have already processed an Excel file and
 
 1.  **Find Global Information:** From the **FULL ORIGINAL FILE CONTEXT** above, find the following:
     *   `寄件廠商`: Find a cell that **exactly matches** one of the names in the "Valid Shipper List".
-    *   `結單日期`: Find a cell containing keywords like '結單日', '結單日期', '訂購截止日', '最後回單日'. Extract its corresponding date value and **format it as "YYYY-MM-DD"**.
+    *   `結單日期`: Find a cell containing keywords like '結單日', '結單日期', '訂購截止日', '最後回單日'. Extract its corresponding date value. **If the year is not specified, infer it by choosing the closest future date relative to today, {current_date_str}.** Finally, format the result as "YYYY-MM-DD".
 
 2.  **Enrich Product Data:** For each product in the **PRE-EXTRACTED PRODUCTS** list, perform the following analysis based on all available information:
     *   `預計發售月份`: Analyze the value of this field. It can be in various formats (e.g., "2026年3月底", "2025-11-01 00:00:00", "2025.11"). Your task is to parse it and **replace its original value** with the standardized `YYYY-MM` format.
@@ -84,12 +86,14 @@ def call_ai_for_enrichment(
         logger("No pre-extracted products to enrich.")
         return None
 
+    current_date_str = datetime.now().strftime("%Y-%m-%d")
     prompt = get_enrichment_prompt(
         full_csv_data,
         pre_extracted_products,
         shipper_list,
         brand_keywords,
         category_keywords,
+        current_date_str,
     )
 
     if debug_path_prefix:
