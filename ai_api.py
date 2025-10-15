@@ -1,6 +1,13 @@
 import json
 
-def get_enrichment_prompt(full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords):
+
+def get_enrichment_prompt(
+    full_csv_data,
+    pre_extracted_products,
+    shipper_list,
+    brand_keywords,
+    category_keywords,
+):
     """
     Generates a prompt for the AI to enrich pre-extracted data.
     The AI's job is to find global info and add semantic tags (brand/category) to products.
@@ -58,7 +65,17 @@ You are an expert data enrichment AI. I have already processed an Excel file and
 """
     return prompt
 
-def call_ai_for_enrichment(client, full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords, logger, debug_path_prefix=None):
+
+def call_ai_for_enrichment(
+    client,
+    full_csv_data,
+    pre_extracted_products,
+    shipper_list,
+    brand_keywords,
+    category_keywords,
+    logger,
+    debug_path_prefix=None,
+):
     """Calls the AI to enrich pre-extracted product data."""
     if not client:
         logger("OpenAI client not configured. Please set your OPENAI_API_KEY.")
@@ -67,24 +84,33 @@ def call_ai_for_enrichment(client, full_csv_data, pre_extracted_products, shippe
         logger("No pre-extracted products to enrich.")
         return None
 
-    prompt = get_enrichment_prompt(full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords)
+    prompt = get_enrichment_prompt(
+        full_csv_data,
+        pre_extracted_products,
+        shipper_list,
+        brand_keywords,
+        category_keywords,
+    )
 
     if debug_path_prefix:
         try:
             prompt_filename = f"{debug_path_prefix}_enrichment_prompt.txt"
-            with open(prompt_filename, 'w', encoding='utf-8') as f:
+            with open(prompt_filename, "w", encoding="utf-8") as f:
                 f.write(prompt)
             logger(f"AI enrichment prompt saved to: {prompt_filename}")
         except Exception as e:
             logger(f"Error saving AI enrichment prompt: {e}")
-    
+
     logger("Calling OpenAI API for data enrichment...")
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are an AI assistant that enriches structured JSON data based on context and rules."},
+                {
+                    "role": "system",
+                    "content": "You are an AI assistant that enriches structured JSON data based on context and rules.",
+                },
                 {"role": "user", "content": prompt},
             ],
             temperature=0,
