@@ -26,6 +26,9 @@ jobs:
       - name: Build executable with PyInstaller
         run: pyinstaller vendor_order_parser.spec
 
+      - name: List files in workspace
+        run: ls -R
+
       - name: Package release assets
         run: |
           $asset_name = "vendor_order_parser-${{ github.ref_name }}.zip"
