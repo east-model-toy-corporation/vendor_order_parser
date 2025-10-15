@@ -132,46 +132,19 @@ def build_final_df(all_products, brand_map, category1_map, category1_keywords_so
         p = p_info['product_data']
         global_info = p_info['global_info']
 
-        release_month = p.get('預計發售月份', '')
-        # Normalize release_month to YYYYMM format
-        if release_month:
-            try:
-                # Case 1: It's already a datetime-like object
-                if not isinstance(release_month, str):
-                    ts = pd.to_datetime(release_month, errors='coerce')
-                    if not pd.isna(ts):
-                        release_month = f"{ts.year}{int(ts.month):02d}"
-                    else:
-                        release_month = str(release_month) # Fallback to string
-                # Case 2: It's a string, try various parsing methods
-                else:
-                    ts = pd.to_datetime(release_month, errors='coerce')
-                    if not pd.isna(ts):
-                        # Successfully parsed a full date string (e.g., "2025-11-01")
-                        release_month = f"{ts.year}{int(ts.month):02d}"
-                    else:
-                        # Failed to parse as a full date, try regex for YYYY/MM
-                        match = re.search(r'(\d{4})[/\\-年.]?(\d{1,2})', release_month)
-                        if match:
-                            year, month = match.groups()
-                            release_month = f"{year}{int(month):02d}"
-                        else:
-                            # Finally, try to find just a month number (e.g., "3月", "3")
-                            month_match = re.search(r'(\d{1,2})', release_month)
-                            if month_match:
-                                month = int(month_match.group(1))
-                                if 1 <= month <= 12:
-                                    today = datetime.now()
-                                    year = today.year
-                                    # If release month is in the past relative to current month, assume it's for the next year
-                                    if month < today.month:
-                                        year += 1
-                                    release_month = f"{year}{month:02d}"
-            except Exception as e:
-                logger(f"Could not parse release_month '{release_month}', leaving as is. Error: {e}")
-                release_month = str(release_month) # Ensure it's a string on error
-        else:
-            release_month = '' 
+        release_month = '' # Default
+        # AI is now expected to have normalized this field to 'YYYY-MM'
+        normalized_month = p.get('預計發售月份') 
+        if normalized_month and isinstance(normalized_month, str):
+            match = re.match(r'^(\d{4})-(\d{2})$', normalized_month)
+            if match:
+                release_month = normalized_month.replace('-', '')
+            else:
+                # If AI fails to follow instructions, log it and use the value as-is
+                logger.warning(f"AI returned unexpected format for 預計發售月份: '{normalized_month}'. Using value as-is.")
+                release_month = normalized_month
+        elif normalized_month:
+            release_month = str(normalized_month) 
 
         # 結單日期（K 欄）：來源日期（檔名優先，否則 AI），不做週末調整；僅嘗試統一格式
         source_date = global_info.get('結單日期', '')
@@ -326,27 +299,31 @@ def extract_products_from_excel(file_path, logger):
 
     # --- Find Header Locations (Row, Col) for each keyword ---
     header_map = {
-        '品名': '品名',
-        '貨號': '貨號',
-        '國際條碼': '國際條碼',
-        '預計發售月份': '預計發售月份',
-        '備註': '備註',
-        '起始進價': '東海成本',
-        '建議售價': '東海售價'
+        '品名': ['品名', '商品名', '品項', '商品', '中文品名'],
+        '貨號': ['sku', '貨號', '商品貨號'],
+        '國際條碼': ['國際條碼', 'jan code', 'jancode', '條碼'],
+        '預計發售月份': ['發售日', '預定到貨', '預計上市日', '發貨日'],
+        '備註': ['備註', '備考', '附註', '註'],
+        '起始進價': ['東海成本'],
+        '建議售價': ['東海售價']
     }
     header_locs = {} # Stores {'起始進價': (row, col), ...}
 
-    for key, keyword in header_map.items():
-        # Find cells that contain the keyword
-        matches = df.apply(lambda col: col.str.contains(keyword, na=False))
-        if matches.any().any():
-            # Get the location of the first match
-            row_idx = matches.any(axis=1).idxmax()
-            col_idx = matches.iloc[row_idx].idxmax()
-            header_locs[key] = (row_idx, col_idx)
-            logger(f"Found header '{keyword}' for '{key}' at location ({row_idx}, {col_idx}).")
-        else:
-            logger(f"Warning: Header for '{key}' ('{keyword}') not found.")
+    for key, keywords in header_map.items():
+        found = False
+        for keyword in keywords:
+            # Find cells that contain the keyword (case-insensitive)
+            matches = df.apply(lambda col: col.str.contains(keyword, na=False, case=False))
+            if matches.any().any():
+                # Get the location of the first match
+                row_idx = matches.any(axis=1).idxmax()
+                col_idx = matches.iloc[row_idx].idxmax()
+                header_locs[key] = (row_idx, col_idx)
+                logger(f"Found header '{keyword}' for '{key}' at location ({row_idx}, {col_idx}).")
+                found = True
+                break # Found a match for this key, move to the next key
+        if not found:
+            logger(f"Warning: Header for '{key}' (keywords: {keywords}) not found.")
             header_locs[key] = (None, None)
 
     # --- Validate that critical headers were found ---

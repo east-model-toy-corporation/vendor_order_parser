@@ -8,6 +8,7 @@ build/
 dist/
 *.exe
 *.zip
+*.spec
 
 # Environment
 .env
@@ -24,3 +25,13 @@ config.json
 # OS
 .DS_Store
 Thumbs.db
+
+# test data
+test/
+
+# BFG Repo-Cleaner reports
+.git.bfg-report/
+
+# Tool outputs and debug files
+*_prompt.txt
+*_response.json

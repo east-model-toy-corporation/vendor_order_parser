@@ -1,3 +1,4 @@
+
 import os
 import sys
 import json
@@ -12,6 +13,11 @@ from data_processor import extract_products_from_excel, convert_excel_to_csv, ge
 from data_processor import build_final_df
 
 def process_files_main(app, api_key, input_files, output_file):
+    # --- MOCK AI RESPONSE FLAG ---
+    # Set to True to skip OpenAI call and use a local file instead.
+    USE_MOCK_AI_RESPONSE = False
+    # --- END MOCK FLAG ---
+
     # --- DEBUG FLAG ---
     # Set to True to save the prompt and AI response for each file.
     SAVE_DEBUG_FILES = True
@@ -44,6 +50,9 @@ def process_files_main(app, api_key, input_files, output_file):
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Define mock response path relative to base_dir
+        MOCK_AI_RESPONSE_PATH = os.path.join(base_dir, 'simple_crawler', 'data', 'inputs', 'example_ai_response.json')
 
         shipper_file = os.path.join(base_dir, '廠商名單.xlsx')
         app.log(f"Using base directory: {base_dir} (looking for 廠商名單.xlsx, service_account.json, config.json here)")
@@ -163,20 +172,50 @@ def process_files_main(app, api_key, input_files, output_file):
             # STAGE 2: AI-based enrichment
             app.log(f"Python 成功提取了 {len(pre_extracted_products)} 個商品，現交由 AI 進行語意分析...")
             
+            # --- Begin new brand scanning logic ---
+            file_brand_override = None
+            single_brand = None # Define single_brand here to have it in scope later
+            try:
+                raw_df = pd.read_excel(file_path, sheet_name=0, header=None).astype(str)
+                found_brands = set()
+                
+                all_cells = raw_df.unstack().dropna().astype(str).str.lower()
+                
+                for keyword in brand_keywords:
+                    if keyword and str(keyword).strip():
+                        if all_cells.str.contains(keyword.lower(), na=False, regex=False).any():
+                            found_brands.add(keyword)
+                
+                app.log(f"在檔案中掃描到 {len(found_brands)} 個品牌: {found_brands if found_brands else '無'}")
+
+                if len(found_brands) == 1:
+                    single_brand = found_brands.pop()
+                    brand_info = brand_map.get(single_brand.lower())
+                    if brand_info:
+                        file_brand_override = brand_info.get('code')
+                        app.log(f"啟用單一品牌覆寫模式，將使用品牌代碼: {file_brand_override}")
+
+            except Exception as e:
+                app.log(f"掃描檔案品牌時發生錯誤: {e}")
+            # --- End new brand scanning logic ---
+
             debug_path_prefix = None
             if SAVE_DEBUG_FILES:
                 base_name = os.path.splitext(os.path.basename(file_path))[0]
                 debug_path_prefix = os.path.normpath(os.path.join(output_dir, base_name))
 
+            # Using the new refactored AI call
             ai_json_str = call_ai_for_enrichment(
                 client, full_csv_for_ai, pre_extracted_products, shipper_list, brand_keywords, category1_keywords_sorted, app.log,
                 debug_path_prefix=debug_path_prefix
             )
 
+            enriched_products = []
+            global_info = {}
+
             if not ai_json_str:
                 app.log(f"AI 豐富化失敗，將僅使用 Python 提取的資料繼續處理。")
-                enriched_products = pre_extracted_products
-                global_info = {}
+                enriched_products = pre_extracted_products # Fallback to python-extracted data
             else:
                 if SAVE_DEBUG_FILES and debug_path_prefix:
                     try:
@@ -196,20 +235,31 @@ def process_files_main(app, api_key, input_files, output_file):
                     global_info = ai_data.get('global_info', {})
                     ai_products = ai_data.get('products', [])
 
-                    # Use the AI's product list as the source of truth,
-                    # then explicitly re-validate it to ensure it meets the price criteria.
-                    validated_ai_products = []
+                    # Validate products from AI based on price
+                    validated_products = []
                     for p in ai_products:
                         cost = p.get('起始進價')
                         sell_price = p.get('建議售價')
-                        # Ensure prices are not None and not empty strings
                         if cost and sell_price:
-                            validated_ai_products.append(p)
+                            validated_products.append(p)
                         else:
                             app.log(f"Info: AI product '{p.get('品名', 'N/A')}' was filtered out due to missing price.")
                     
-                    enriched_products = validated_ai_products
+
+                    
+                    # --- Apply file-level brand override ---
+                    if file_brand_override and single_brand:
+                        app.log(f"套用檔案級別的品牌覆寫: {file_brand_override}")
+                        for p in validated_products:
+                            p['final_brand_info'] = {'name': single_brand, 'code': file_brand_override}
+                    
+                    enriched_products = validated_products
                     app.log("成功合併 AI 的分析結果。")
+
+                except json.JSONDecodeError:
+                    app.log(f"錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")
+                    enriched_products = pre_extracted_products # Fallback
+                    global_info = {}
 
                 except json.JSONDecodeError:
                     app.log(f"錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")

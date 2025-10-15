@@ -26,9 +26,10 @@ You are an expert data enrichment AI. I have already processed an Excel file and
 
 1.  **Find Global Information:** From the **FULL ORIGINAL FILE CONTEXT** above, find the following:
     *   `寄件廠商`: Find a cell that **exactly matches** one of the names in the "Valid Shipper List".
-    *   `結單日期`: Find a cell containing keywords like '結單日', '結單日期', '訂購截止日', '最後回單日' and extract its corresponding date value.
+    *   `結單日期`: Find a cell containing keywords like '結單日', '結單日期', '訂購截止日', '最後回單日'. Extract its corresponding date value and **format it as "YYYY-MM-DD"**.
 
-2.  **Enrich Product Data:** For each product in the **PRE-EXTRACTED PRODUCTS** list, perform the following analysis based on all available information (the product data itself and the full original file context):
+2.  **Enrich Product Data:** For each product in the **PRE-EXTRACTED PRODUCTS** list, perform the following analysis based on all available information:
+    *   `預計發售月份`: Analyze the value of this field. It can be in various formats (e.g., "2026年3月底", "2025-11-01 00:00:00", "2025.11"). Your task is to parse it and **replace its original value** with the standardized `YYYY-MM` format.
     *   `偵測到的品牌`: Find the most specific and correct brand name from the "Valid Brand Keyword List". Prioritize the actual manufacturer over the distributor (e.g., 'FREEing' over 'Good Smile Company' if both are present).
     *   `ai_matched_category_keyword`: Analyze the "Valid Category Keyword List". Find the best keyword where the product information is associated with ALL the words in the category keyword.
 
@@ -37,7 +38,7 @@ You are an expert data enrichment AI. I have already processed an Excel file and
 *   Return a single JSON object.
 *   The JSON object must have two top-level keys:
     1.  `global_info`: An object containing the `寄件廠商` and `結單日期` you found.
-    2.  `products`: An array of objects. Each object must be one of the products from the input, but with your two new fields (`偵測到的品牌`, `ai_matched_category_keyword`) added. **Do not alter the existing fields of the products.**
+    2.  `products`: An array of objects. Each object must be one of the products from the input. You will add `偵測到的品牌` and `ai_matched_category_keyword`. You **must** also update the `預計發售月份` field with the normalized value. **Do not alter any other original fields.**
 *   **CRITICAL**: Your entire response must be ONLY the JSON object, with no other text, explanations, or markdown formatting.
 
 **VALID LISTS FOR MATCHING:**
