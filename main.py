@@ -7,14 +7,14 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 
 from gui import App
-from ai_api import call_ai_to_extract_data
-from data_processor import convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename, ERP_COLUMNS
+from ai_api import call_ai_for_enrichment
+from data_processor import extract_products_from_excel, convert_excel_to_csv, generate_erp_excel, extract_order_date_from_filename, ERP_COLUMNS
 from data_processor import build_final_df
 
 def process_files_main(app, api_key, input_files, output_file):
     # --- DEBUG FLAG ---
     # Set to True to save the prompt and AI response for each file.
-    SAVE_DEBUG_FILES = False
+    SAVE_DEBUG_FILES = True
     # --- END DEBUG FLAG ---
     try:
         client = openai.OpenAI(api_key=api_key)
@@ -152,141 +152,97 @@ def process_files_main(app, api_key, input_files, output_file):
 
         for i, file_path in enumerate(input_files):
             app.log(f"\n--- 處理檔案 {i+1}/{len(input_files)}: {os.path.basename(file_path)} ---")
+
+            # STAGE 1: Reliable data extraction using Python
+            pre_extracted_products, full_csv_for_ai = extract_products_from_excel(file_path, app.log)
+
+            if not pre_extracted_products:
+                app.log("在檔案中沒有找到有效的商品列 (基於東海成本/售價)，跳過此檔案。")
+                continue
             
-            # --- Begin new brand scanning logic ---
-            file_brand_override = None
-            all_cells = None
-            try:
-                raw_df = pd.read_excel(file_path, sheet_name=0, header=None).astype(str)
-                found_brands = set()
-                
-                # Flatten all cell values into a single series for efficient searching
-                all_cells = raw_df.unstack().dropna().astype(str).str.lower()
-                
-                # Case-insensitive search for each keyword
-                for keyword in brand_keywords:
-                    if keyword and str(keyword).strip(): # Ensure keyword is not empty
-                        # Check if keyword exists in any cell
-                        if all_cells.str.contains(keyword.lower(), na=False, regex=False).any():
-                            found_brands.add(keyword)
-                
-                app.log(f"在檔案中掃描到 {len(found_brands)} 個品牌: {found_brands if found_brands else '無'}")
-
-                if len(found_brands) == 1:
-                    single_brand = found_brands.pop()
-                    brand_info = brand_map.get(single_brand.lower())
-                    if brand_info:
-                        file_brand_override = brand_info.get('code')
-                        app.log(f"啟用單一品牌覆寫模式，將使用品牌代碼: {file_brand_override}")
-
-            except Exception as e:
-                app.log(f"掃描檔案品牌時發生錯誤: {e}")
-            # --- End new brand scanning logic ---
-
-            csv_content = convert_excel_to_csv(file_path, app.log)
-            if not csv_content: continue
-            # 優先嘗試從檔名擷取結單日期
-            filename_order_date = extract_order_date_from_filename(file_path, app.log)
-
-            # 新規則：先嘗試從檔名找寄件廠商（只要檔名包含任一 shipper token 即視為命中），
-            # 若檔名命中則只把該 token 傳給 AI（優先），否則再以檔案內容搭配完整 shipper_list 搜尋。
-            filename_based_shipper = None
-            basename = os.path.basename(file_path)
-            if shipper_list:
-                lowname = basename.lower()
-                for s in shipper_list:
-                    try:
-                        if str(s).strip() and str(s).lower() in lowname:
-                            filename_based_shipper = s
-                            break
-                    except Exception:
-                        continue
-
-            if filename_based_shipper:
-                app.log(f"在檔名找到寄件廠商: {filename_based_shipper}（將優先使用此值）")
-                shipper_list_for_call = [filename_based_shipper]
-            else:
-                shipper_list_for_call = shipper_list
-
+            # STAGE 2: AI-based enrichment
+            app.log(f"Python 成功提取了 {len(pre_extracted_products)} 個商品，現交由 AI 進行語意分析...")
+            
             debug_path_prefix = None
             if SAVE_DEBUG_FILES:
                 base_name = os.path.splitext(os.path.basename(file_path))[0]
                 debug_path_prefix = os.path.normpath(os.path.join(output_dir, base_name))
 
-            ai_json_str = call_ai_to_extract_data(
-                client, csv_content, shipper_list_for_call, brand_keywords, category1_keywords_sorted, app.log,
+            ai_json_str = call_ai_for_enrichment(
+                client, full_csv_for_ai, pre_extracted_products, shipper_list, brand_keywords, category1_keywords_sorted, app.log,
                 debug_path_prefix=debug_path_prefix
             )
+
             if not ai_json_str:
-                app.log(f"AI 提取失敗，跳過檔案 {os.path.basename(file_path)}。")
-                continue
-
-            if SAVE_DEBUG_FILES and debug_path_prefix:
-                # Save the raw AI response for user inspection
-                try:
-                    ai_response_filename = f"{debug_path_prefix}_ai_response.json"
-                    with open(ai_response_filename, 'w', encoding='utf-8') as f:
-                        # Try to pretty-print if it's valid JSON, otherwise save as is
-                        try:
-                            parsed = json.loads(ai_json_str)
-                            json.dump(parsed, f, ensure_ascii=False, indent=4)
-                        except json.JSONDecodeError:
-                            f.write(ai_json_str)
-                    app.log(f"AI 原始回應已儲存至: {ai_response_filename}")
-                except Exception as e:
-                    app.log(f"儲存 AI 原始回應時發生錯誤: {e}")
-
-            try:
-                parsed_json = json.loads(ai_json_str)
-                global_info = parsed_json.get('global_info', {})
-
-                # Overwrite shipper with filename-based one if it exists, ensuring priority.
-                if filename_based_shipper:
-                    app.log(f"覆寫AI結果：強制使用檔名找到的寄件廠商 '{filename_based_shipper}'。")
-                    global_info['寄件廠商'] = filename_based_shipper
-
-                ai_date = global_info.get('結單日期')
-                # 新命名規則：J=內部結單日期（內部調整用），K=結單日期（來源/外部）
-                chosen = filename_order_date if filename_order_date else ai_date
-                if chosen:
-                    # K 欄：來源日期（檔名優先，否則 AI）
-                    global_info['結單日期'] = chosen
-                    # J 欄：內部結單日期（與來源相同，後續在 data_processor 中再避開週末）
-                    global_info['內部結單日期'] = chosen
-                products = parsed_json.get('products', [])
-
-                # --- Begin Python-side validation ---
-                validated_products = []
-                for p in products:
-                    start_price = p.get('起始進價')
-                    rec_price = p.get('建議售價')
-                    # Ensure both prices exist, are not empty strings, and are not just 'nan' or similar placeholders.
-                    if start_price and str(start_price).strip() and rec_price and str(rec_price).strip():
-                        validated_products.append(p)
-                    else:
-                        app.log(f"過濾掉商品 '{p.get('品名', 'N/A')[:20]}...' 因為缺少有效的價格資訊。")
+                app.log(f"AI 豐富化失敗，將僅使用 Python 提取的資料繼續處理。")
+                enriched_products = pre_extracted_products
+                global_info = {}
+            else:
+                if SAVE_DEBUG_FILES and debug_path_prefix:
+                    try:
+                        ai_response_filename = f"{debug_path_prefix}_enrichment_response.json"
+                        with open(ai_response_filename, 'w', encoding='utf-8') as f:
+                            try:
+                                parsed = json.loads(ai_json_str)
+                                json.dump(parsed, f, ensure_ascii=False, indent=4)
+                            except json.JSONDecodeError:
+                                f.write(ai_json_str)
+                        app.log(f"AI 豐富化回應已儲存至: {ai_response_filename}")
+                    except Exception as e:
+                        app.log(f"儲存 AI 豐富化回應時發生錯誤: {e}")
                 
-                products = validated_products # Replace original products with the validated list
-                # --- End Python-side validation ---
+                try:
+                    ai_data = json.loads(ai_json_str)
+                    global_info = ai_data.get('global_info', {})
+                    ai_products = ai_data.get('products', [])
 
-                # Analyze detected brands for this file and apply overrides
-                # New logic: If a file-level brand override is set, apply it to all products.
-                if file_brand_override:
-                    app.log(f"套用檔案級別的品牌覆寫: {file_brand_override}")
-                    for p in products:
-                        p['final_brand_info'] = {'name': single_brand, 'code': file_brand_override}
+                    # Use the AI's product list as the source of truth,
+                    # then explicitly re-validate it to ensure it meets the price criteria.
+                    validated_ai_products = []
+                    for p in ai_products:
+                        cost = p.get('起始進價')
+                        sell_price = p.get('建議售價')
+                        # Ensure prices are not None and not empty strings
+                        if cost and sell_price:
+                            validated_ai_products.append(p)
+                        else:
+                            app.log(f"Info: AI product '{p.get('品名', 'N/A')}' was filtered out due to missing price.")
+                    
+                    enriched_products = validated_ai_products
+                    app.log("成功合併 AI 的分析結果。")
 
-                # Append products to the master list
-                for p in products:
-                    all_processed_products.append({"global_info": global_info, "product_data": p})
+                except json.JSONDecodeError:
+                    app.log(f"錯誤: AI 回傳的不是有效的 JSON。將僅使用 Python 提取的資料。")
+                    enriched_products = pre_extracted_products
+                    global_info = {}
 
-            except json.JSONDecodeError:
-                app.log(f"錯誤: AI 回傳的不是有效的 JSON。")
-                raw_data_filename = f"{os.path.splitext(os.path.basename(file_path))[0]}_invalid_response.txt"
-                raw_data_path = os.path.join(output_dir, raw_data_filename)
-                with open(raw_data_path, 'w', encoding='utf-8') as f: f.write(ai_json_str)
-                app.log(f"無效的 AI 回應已儲存至: {raw_data_path}")
-                continue
+            # --- STAGE 3: Merging and Final Processing ---
+            filename_order_date = extract_order_date_from_filename(file_path, app.log)
+            
+            filename_based_shipper = None
+            basename = os.path.basename(file_path)
+            if shipper_list:
+                lowname = basename.lower()
+                for s in shipper_list:
+                    if str(s).strip() and str(s).lower() in lowname:
+                        filename_based_shipper = s
+                        break
+            
+            if filename_based_shipper:
+                app.log(f"在檔名找到寄件廠商: {filename_based_shipper}（將覆寫 AI 結果）")
+                global_info['寄件廠商'] = filename_based_shipper
+
+            ai_date = global_info.get('結單日期')
+            chosen_date = filename_order_date if filename_order_date else ai_date
+            if chosen_date:
+                global_info['結單日期'] = chosen_date
+                global_info['內部結單日期'] = chosen_date
+
+            # Append products to the master list for final processing
+            for p in enriched_products:
+                all_processed_products.append({"global_info": global_info, "product_data": p})
+
+            app.log(f"成功處理了 {len(enriched_products)} 個商品。")
         
         if all_processed_products:
             # Build final DataFrame first
