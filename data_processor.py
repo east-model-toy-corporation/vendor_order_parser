@@ -133,36 +133,45 @@ def build_final_df(all_products, brand_map, category1_map, category1_keywords_so
         global_info = p_info['global_info']
 
         release_month = p.get('預計發售月份', '')
-        # Normalize release_month whether it's a datetime-like, a string with time, or a simple string
-        if release_month is None:
-            release_month = ''
-        else:
-            # If it's not a string, try to parse with pandas (covers Timestamp/datetime)
-            if not isinstance(release_month, str):
-                try:
+        # Normalize release_month to YYYYMM format
+        if release_month:
+            try:
+                # Case 1: It's already a datetime-like object
+                if not isinstance(release_month, str):
                     ts = pd.to_datetime(release_month, errors='coerce')
                     if not pd.isna(ts):
                         release_month = f"{ts.year}{int(ts.month):02d}"
                     else:
-                        release_month = str(release_month)
-                except Exception:
-                    release_month = str(release_month)
-            else:
-                # it's a string: try parsing as datetime first (handles '2025-11-01 00:00:00')
-                try:
+                        release_month = str(release_month) # Fallback to string
+                # Case 2: It's a string, try various parsing methods
+                else:
                     ts = pd.to_datetime(release_month, errors='coerce')
                     if not pd.isna(ts):
+                        # Successfully parsed a full date string (e.g., "2025-11-01")
                         release_month = f"{ts.year}{int(ts.month):02d}"
                     else:
+                        # Failed to parse as a full date, try regex for YYYY/MM
                         match = re.search(r'(\d{4})[/\\-年.]?(\d{1,2})', release_month)
                         if match:
                             year, month = match.groups()
                             release_month = f"{year}{int(month):02d}"
-                except Exception:
-                    match = re.search(r'(\d{4})[/\\-年.]?(\d{1,2})', release_month)
-                    if match:
-                        year, month = match.groups()
-                        release_month = f"{year}{int(month):02d}"
+                        else:
+                            # Finally, try to find just a month number (e.g., "3月", "3")
+                            month_match = re.search(r'(\d{1,2})', release_month)
+                            if month_match:
+                                month = int(month_match.group(1))
+                                if 1 <= month <= 12:
+                                    today = datetime.now()
+                                    year = today.year
+                                    # If release month is in the past relative to current month, assume it's for the next year
+                                    if month < today.month:
+                                        year += 1
+                                    release_month = f"{year}{month:02d}"
+            except Exception as e:
+                logger(f"Could not parse release_month '{release_month}', leaving as is. Error: {e}")
+                release_month = str(release_month) # Ensure it's a string on error
+        else:
+            release_month = '' 
 
         # 結單日期（K 欄）：來源日期（檔名優先，否則 AI），不做週末調整；僅嘗試統一格式
         source_date = global_info.get('結單日期', '')
@@ -303,3 +312,77 @@ def build_final_df(all_products, brand_map, category1_map, category1_keywords_so
     final_df = pd.DataFrame(processed_rows)
     final_df = final_df.reindex(columns=ERP_COLUMNS).fillna('')
     return final_df
+
+def extract_products_from_excel(file_path, logger):
+    """
+    Reads an Excel file, intelligently finds header cells for required columns (even if they are on different rows),
+    validates product rows based on price columns, and extracts data into a clean list of dictionaries.
+    """
+    try:
+        df = pd.read_excel(file_path, sheet_name=0, header=None).astype(str).replace('nan', '')
+    except Exception as e:
+        logger(f"Error reading Excel file {os.path.basename(file_path)}: {e}")
+        return [], None
+
+    # --- Find Header Locations (Row, Col) for each keyword ---
+    header_map = {
+        '品名': '品名',
+        '貨號': '貨號',
+        '國際條碼': '國際條碼',
+        '預計發售月份': '預計發售月份',
+        '備註': '備註',
+        '起始進價': '東海成本',
+        '建議售價': '東海售價'
+    }
+    header_locs = {} # Stores {'起始進價': (row, col), ...}
+
+    for key, keyword in header_map.items():
+        # Find cells that contain the keyword
+        matches = df.apply(lambda col: col.str.contains(keyword, na=False))
+        if matches.any().any():
+            # Get the location of the first match
+            row_idx = matches.any(axis=1).idxmax()
+            col_idx = matches.iloc[row_idx].idxmax()
+            header_locs[key] = (row_idx, col_idx)
+            logger(f"Found header '{keyword}' for '{key}' at location ({row_idx}, {col_idx}).")
+        else:
+            logger(f"Warning: Header for '{key}' ('{keyword}') not found.")
+            header_locs[key] = (None, None)
+
+    # --- Validate that critical headers were found ---
+    cost_price_loc = header_locs.get('起始進價')
+    sell_price_loc = header_locs.get('建議售價')
+
+    if cost_price_loc[1] is None or sell_price_loc[1] is None:
+        logger("Error: Critical headers '東海成本' or '東海售價' not found. Cannot process products.")
+        return [], df.to_csv(index=False, header=False)
+
+    # --- Determine Data Start Row ---
+    # Data starts on the row after the lowest header found
+    last_header_row = max(r for r, c in header_locs.values() if r is not None)
+    data_start_row = last_header_row + 1
+    logger(f"Data rows will be processed starting from row index {data_start_row}.")
+    
+    product_df = df.iloc[data_start_row:]
+    
+    # --- Iterate, Validate, and Extract ---
+    extracted_products = []
+    cost_price_col = cost_price_loc[1]
+    sell_price_col = sell_price_loc[1]
+
+    for i, row in product_df.iterrows():
+        cost_price = row.get(cost_price_col, '').strip()
+        sell_price = row.get(sell_price_col, '').strip()
+
+        if cost_price and sell_price:
+            product_data = {}
+            for key, loc in header_locs.items():
+                if loc[1] is not None: # if column was found
+                    product_data[key] = row.get(loc[1], '').strip()
+            
+            extracted_products.append(product_data)
+            
+    logger(f"Extracted {len(extracted_products)} valid products from the file based on price columns.")
+    
+    full_csv_for_ai = df.to_csv(index=False, header=False)
+    return extracted_products, full_csv_for_ai

@@ -1,37 +1,46 @@
 import openai
+import json
 
-def get_extraction_prompt(csv_data, shipper_list, brand_keywords, category_keywords):
-    """Generates the prompt for the AI to extract data from a CSV string."""
+def get_enrichment_prompt(full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords):
+    """
+    Generates a prompt for the AI to enrich pre-extracted data.
+    The AI's job is to find global info and add semantic tags (brand/category) to products.
+    """
+    # Convert the list of product dicts to a compact JSON string for the prompt
+    products_json_str = json.dumps(pre_extracted_products, ensure_ascii=False, indent=2)
+
     prompt = f"""
-You are an expert data extraction AI. Your task is to analyze the following CSV data, which represents an entire Excel sheet, and extract structured information based on the rules provided.
+You are an expert data enrichment AI. I have already processed an Excel file and extracted the core product data. Your task is to analyze this pre-extracted data along with the full context of the original file to add semantic information.
 
-**Rules:**
+**CONTEXT: FULL ORIGINAL FILE (in CSV format):**
+```csv
+{full_csv_data}
+```
 
-1.  **Identify Global Information:**
-    *   `寄件廠商`: Scan the entire CSV. Find a cell that **exactly matches** one of the names in the provided "Valid Shipper List". This is the global shipper.
-    *   `結單日期`: Scan the entire CSV. Find a cell containing keywords like '結單日', '結單日期', '訂購截止日', '最後回單日' and extract its corresponding date value.
+**PRE-EXTRACTED PRODUCTS:**
+```json
+{products_json_str}
+```
 
-2.  **Identify Product Rows:**
-    *   First, determine the header row. The header contains titles like '品名', '貨號', '條碼', '東海成本'.
-    *   Process each row below the header as a potential product.
+**YOUR TASKS:**
 
-3.  **Extract Product Data:** For each product row, extract the following based on the header. For each field, find the column with a matching header and extract the **value** from that column for the current product row. **Never return the header text itself.**
-    *   `國際條碼`: Keywords [\'國際條碼\', \'jan code\', \'條碼\']
-    *   `貨號`: Keywords [\'sku\', \'貨號\', \'商品貨號\']
-    *   `品名`: Keywords [\'品名\', \'商品名\', \'品項\', \'商品\', \'中文品名\']
-    *   `預計發售月份`: Keywords [\'發售日\', \'預定到貨\', \'預計上市日\', \'發貨日\']
-    *   `備註`: Keywords [\'備註\', \'備考\', \'附註\', \'註\']
-    *   `起始進價`: Find the column with a header like \'東海成本\' and extract its numeric value.
-    *   `建議售價`: Find the column with a header like \'東海售價\' and extract its numeric value.
-    *   `偵測到的品牌`: Analyze all columns for the product row. Find the most specific and correct brand name from the "Valid Brand Keyword List". Some products might mention both a manufacturer and a distributor (e.g., a \'FREEing\' product distributed by \'Good Smile Company\'). In such cases, prioritize the actual manufacturer (\'FREEing\') over the distributor. If only one brand from the list is mentioned, use that one. If no match, omit this field.
-    *   `ai_matched_category_keyword`: This is a new, critical rule. Analyze the "Valid Category Keyword List". For each product, determine if its information (across all its columns) is associated with ALL the words in a given category keyword. For example, if a category keyword is "Good Smile Company 1/6", the product must be related to BOTH "Good Smile Company" AND "1/6" to be considered a match. If you find a confident match, return the original, full keyword (e.g., "Good Smile Company 1/6") in this field. Otherwise, omit this field.
+1.  **Find Global Information:** From the **FULL ORIGINAL FILE CONTEXT** above, find the following:
+    *   `寄件廠商`: Find a cell that **exactly matches** one of the names in the "Valid Shipper List".
+    *   `結單日期`: Find a cell containing keywords like '結單日', '結單日期', '訂購截止日', '最後回單日' and extract its corresponding date value.
 
-4.  **Output Format:**
-    *   Return a single JSON object.
-    *   The JSON object must have two top-level keys:
-        1.  `global_info`: An object containing the `寄件廠商` and `結單日期` you found.
-        2.  `products`: An array of objects, where each object is a product that passed the filtering rule.
-    *   **CRITICAL**: Your entire response must be ONLY the JSON object, with no other text, explanations, or markdown formatting.
+2.  **Enrich Product Data:** For each product in the **PRE-EXTRACTED PRODUCTS** list, perform the following analysis based on all available information (the product data itself and the full original file context):
+    *   `偵測到的品牌`: Find the most specific and correct brand name from the "Valid Brand Keyword List". Prioritize the actual manufacturer over the distributor (e.g., 'FREEing' over 'Good Smile Company' if both are present).
+    *   `ai_matched_category_keyword`: Analyze the "Valid Category Keyword List". Find the best keyword where the product information is associated with ALL the words in the category keyword.
+
+**OUTPUT FORMAT:**
+
+*   Return a single JSON object.
+*   The JSON object must have two top-level keys:
+    1.  `global_info`: An object containing the `寄件廠商` and `結單日期` you found.
+    2.  `products`: An array of objects. Each object must be one of the products from the input, but with your two new fields (`偵測到的品牌`, `ai_matched_category_keyword`) added. **Do not alter the existing fields of the products.**
+*   **CRITICAL**: Your entire response must be ONLY the JSON object, with no other text, explanations, or markdown formatting.
+
+**VALID LISTS FOR MATCHING:**
 
 **Valid Shipper List:**
 {shipper_list}
@@ -47,50 +56,42 @@ You are an expert data extraction AI. Your task is to analyze the following CSV 
 **Valid Category Keyword List:**
 {category_keywords}
 """
-
-    prompt += f"""
-**CSV Data to Process:**
-```csv
-{csv_data}
-```
-"""
     return prompt
 
-def call_ai_to_extract_data(client, csv_data, shipper_list, brand_keywords, category_keywords, logger, debug_path_prefix=None):
-    """Calls the AI to extract structured JSON from CSV data."""
+def call_ai_for_enrichment(client, full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords, logger, debug_path_prefix=None):
+    """Calls the AI to enrich pre-extracted product data."""
     if not client:
-        logger("OpenAI client not configured. Please set your OPENAI_API_KEY environment variable.")
+        logger("OpenAI client not configured. Please set your OPENAI_API_KEY.")
         return None
-    if not csv_data:
-        logger("No CSV data to process.")
+    if not pre_extracted_products:
+        logger("No pre-extracted products to enrich.")
         return None
 
-    prompt = get_extraction_prompt(csv_data, shipper_list, brand_keywords, category_keywords)
+    prompt = get_enrichment_prompt(full_csv_data, pre_extracted_products, shipper_list, brand_keywords, category_keywords)
 
-    # Save the prompt for user inspection if a path is provided
     if debug_path_prefix:
         try:
-            prompt_filename = f"{debug_path_prefix}_prompt.txt"
+            prompt_filename = f"{debug_path_prefix}_enrichment_prompt.txt"
             with open(prompt_filename, 'w', encoding='utf-8') as f:
                 f.write(prompt)
-            logger(f"AI 請求內容已儲存至: {prompt_filename}")
+            logger(f"AI enrichment prompt saved to: {prompt_filename}")
         except Exception as e:
-            logger(f"儲存 AI 請求內容時發生錯誤: {e}")
+            logger(f"Error saving AI enrichment prompt: {e}")
     
-    logger("Calling OpenAI API for data extraction...")
+    logger("Calling OpenAI API for data enrichment...")
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are an AI assistant that extracts structured JSON from raw CSV data according to user-provided rules."},
+                {"role": "system", "content": "You are an AI assistant that enriches structured JSON data based on context and rules."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0,
             response_format={"type": "json_object"},
         )
-        logger("Successfully received response from AI.")
+        logger("Successfully received response from AI for enrichment.")
         return response.choices[0].message.content
     except Exception as e:
-        logger(f"Error calling OpenAI API: {e}")
+        logger(f"Error calling OpenAI API for enrichment: {e}")
         return None
