@@ -28,6 +28,7 @@ Thumbs.db
 
 # test data
 test/
+手動輸入指令.txt
 
 # BFG Repo-Cleaner reports
 .git.bfg-report/
